@@ -1,0 +1,129 @@
+# Baseline configuration for 24h ECG dataset with class weights
+# This config is specifically for the preprocessed_24h_1 dataset
+# Class weights are calculated based on the class distribution of this dataset
+# 
+# IMPORTANT: This config is dataset-specific. Do not use for other datasets!
+
+# Random seed for reproducibility
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# Data settings for 24h dataset
+data:
+  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/icu_ecgs_24h_P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # Preprocessing (same as baseline)
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  # Data augmentation (same as baseline)
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+    baseline_wander: true
+    freq_min: 0.15
+    freq_max: 0.4
+    amp_min: 0.03
+    amp_max: 0.08
+
+# Training hyperparameters
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  # Optimizer
+  optimizer:
+    type: "Adam"
+    lr: 5e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  # Gradient clipping
+  gradient_clip_norm: 1.0
+  
+  # Dropout rate
+  dropout_rate: 0.3
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  # Loss function with class weights for 24h dataset
+  # Weights calculated based on training set distribution (28,147 samples):
+  # Class distribution: [4367, 9294, 4985, 2848, 1781, 1063, 808, 506, 448, 2047]
+  # Method: balanced weights (n_samples / (n_classes * count[i]))
+  # Normalized so mean = 1.0
+  loss:
+    type: "weighted_ce"
+    weight: [2.1, 0.6, 1.1, 1.9, 3.0, 5.0, 6.6, 10.5, 11.8, 2.6]
+    # Class 0: 2.1  (15.5% of samples)
+    # Class 1: 0.6  (33.0% of samples) - most frequent, lowest weight
+    # Class 2: 1.1  (17.7% of samples)
+    # Class 3: 1.9  (10.1% of samples)
+    # Class 4: 3.0  (6.3% of samples)
+    # Class 5: 5.0  (3.8% of samples)
+    # Class 6: 6.6  (2.9% of samples)
+    # Class 7: 10.5 (1.8% of samples) - minority class
+    # Class 8: 11.8 (1.6% of samples) - rarest class, highest weight
+    # Class 9: 2.6  (7.3% of samples)
+
+# Validation settings
+validation:
+  val_split: 0.1  # 10% for 80-10-10 split
+  val_frequency: 1
+
+# Test settings
+test_split: 0.1  # 10% for 80-10-10 split
+
+# Early stopping
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"
+  mode: "min"
+
+# Checkpointing
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+# Logging
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - "accuracy"
+    - "f1_score"
+    - "precision"
+    - "recall"
+    - "auc_roc"
+    - "auc_pr"
+

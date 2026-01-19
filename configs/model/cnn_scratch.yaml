@@ -1,0 +1,11 @@
+# CNN from scratch model-specific configuration
+# Merges with baseline.yaml
+# Only CNN-specific overrides go here
+
+model:
+  type: "CNNScratch"
+  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+  
+  # CNN-specific architecture parameters (if needed in future)
+  # Currently using fixed architecture, can be made configurable later
+
