@@ -1,0 +1,28 @@
+# Default data paths for ECG visualization and processing
+# Override these paths via command-line arguments or environment variables
+
+# ECG data directories
+ecg:
+  # Demo dataset (MIMIC-IV-ECG demo)
+  demo_dir: "data/raw/demo/ecg/mimic-iv-ecg-demo"
+  
+  # Full dataset (if available)
+  # full_dir: "data/raw/ecg/mimic-iv-ecg"
+  
+  # Processed data
+  # processed_dir: "data/processed/ecg"
+
+# Output directories
+outputs:
+  # ECG visualization outputs
+  ecg_visualizing: "outputs/ecg_visualizing"
+  # Subdirectories for ECG visualizations
+  ecg_visualizing_12lead: "outputs/ecg_visualizing/12lead"
+  ecg_visualizing_single_lead: "outputs/ecg_visualizing/single_lead"
+  ecg_visualizing_timestamps: "outputs/ecg_visualizing/timestamps"
+  
+  # Other outputs
+  plots: "outputs/plots"
+  models: "outputs/models"
+  logs: "outputs/logs"
+

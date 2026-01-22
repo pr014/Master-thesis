@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=cnn_scratch_los
+#SBATCH --job-name=resnet1d14
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=04:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=03:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -58,7 +58,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 cd "${SLURM_SUBMIT_DIR}"
 
 # Training starten
-python scripts/training/cnn_from_scratch/all_icu_ecgs/train_cnn_scratch.py
+python scripts/training/all_icu_ecgs/pretrained_CNN/train_resnet1d_14.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -112,3 +112,4 @@ echo "Checkpoints verfügbar in: outputs/checkpoints/"
 
 # Exit mit Training-Exit-Code
 exit $TRAINING_EXIT_CODE
+

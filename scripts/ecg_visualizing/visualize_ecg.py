@@ -36,7 +36,7 @@ def get_default_output_dir(subdir: str = "") -> Path:
     Returns:
         Path to output directory
     """
-    config_path = Path("configs/data/default_paths.yaml")
+    config_path = Path("configs/visualization/default_paths.yaml")
     base_dir = Path("outputs/ecg_visualizing")
     
     if config_path.exists():

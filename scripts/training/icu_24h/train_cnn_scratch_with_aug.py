@@ -18,8 +18,8 @@ from src.utils.config_loader import load_config
 def main():
     """Main training function."""
     # Load configs
-    # Use baseline.yaml for training WITH augmentation
-    base_config_path = Path("configs/baseline.yaml")
+    # Use baseline_with_aug.yaml for training WITH augmentation
+    base_config_path = Path("configs/icu_24h/baseline_with_aug.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -45,10 +45,10 @@ def main():
         # Try relative to data_dir
         data_dir = config.get("data", {}).get("data_dir", "")
         if data_dir:
-            icustays_path = Path(data_dir).parent / "icustays.csv"
+            icustays_path = Path(data_dir).parent / "labeling" / "labels_csv" / "icustays.csv"
         else:
             # Default fallback (relative to project root)
-            icustays_path = Path("data/icustays.csv")
+            icustays_path = Path("data/labeling/labels_csv/icustays.csv")
     
     icustays_path = Path(icustays_path)
     if not icustays_path.exists():

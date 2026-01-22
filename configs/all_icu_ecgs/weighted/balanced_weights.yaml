@@ -1,0 +1,124 @@
+# Baseline configuration for all_icu_ecgs dataset with class weights
+# This config is specifically for the all_icu_ecgs_P1 dataset
+# Class weights are calculated based on the class distribution of this dataset
+# 
+# IMPORTANT: This config is dataset-specific. Do not use for other datasets!
+
+# Random seed for reproducibility
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# Data settings for all_icu_ecgs dataset
+data:
+  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/all_icu_ecgs_P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # Preprocessing (same as baseline)
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  # Data augmentation (same as baseline)
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+
+# Training hyperparameters
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  # Optimizer
+  optimizer:
+    type: "Adam"
+    lr: 5e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  # Gradient clipping
+  gradient_clip_norm: 1.0
+  
+  # Dropout rate
+  dropout_rate: 0.3
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  # Loss function with class weights for all_icu_ecgs dataset
+  loss:
+    type: "weighted_ce"
+    weight: [0.5, 0.2, 0.4, 0.6, 0.8, 1.2, 1.5, 2.1, 2.3, 0.3]
+  # Weights calculated based on training set distribution (61,663 samples):
+  # Class distribution: [7073, 15085, 9585, 6231, 4367, 2973, 2436, 1766, 1556, 10591]
+  # Method: balanced weights (n_samples / (n_classes * count[i]))
+  # Normalized so mean = 1.0
+  # Class 0: 0.51 (7,073 samples, 11.47%)
+  # Class 1: 0.24 (15,085 samples, 24.46%)
+  # Class 2: 0.38 (9,585 samples, 15.54%)
+  # Class 3: 0.58 (6,231 samples, 10.10%)
+  # Class 4: 0.83 (4,367 samples, 7.08%)
+  # Class 5: 1.22 (2,973 samples, 4.82%)
+  # Class 6: 1.49 (2,436 samples, 3.95%)
+  # Class 7: 2.06 (1,766 samples, 2.86%)
+  # Class 8: 2.34 (1,556 samples, 2.52%)
+  # Class 9: 0.34 (10,591 samples, 17.18%)
+
+# Validation settings
+validation:
+  val_split: 0.1  # 10% for 80-10-10 split
+  val_frequency: 1
+
+# Test settings
+test_split: 0.1  # 10% for 80-10-10 split
+
+# Early stopping
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"
+  mode: "min"
+
+# Checkpointing
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+# Logging
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - "accuracy"
+    - "f1_score"
+    - "precision"
+    - "recall"
+    - "auc_roc"
+    - "auc_pr"
+

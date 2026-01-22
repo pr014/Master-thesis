@@ -16,7 +16,7 @@ from src.data.ecg import extract_timestamps_from_directory, extract_timestamp_fr
 
 def get_default_output_dir() -> Path:
     """Get default output directory for ECG timestamps."""
-    config_path = Path("configs/data/default_paths.yaml")
+    config_path = Path("configs/visualization/default_paths.yaml")
     base_dir = Path("outputs/ecg_visualizing/timestamps")
     
     if config_path.exists():

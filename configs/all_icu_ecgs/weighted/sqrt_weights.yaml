@@ -1,0 +1,134 @@
+# Baseline configuration for all_icu_ecgs dataset with class weights (SQRT method)
+# This config is specifically for the all_icu_ecgs_P1 dataset
+# Class weights are calculated using Square-Root Weighting (SQINV) method
+# 
+# IMPORTANT: This config is dataset-specific. Do not use for other datasets!
+#
+# Weighting Method: Square-Root Weighting (SQINV)
+# Formula: w_i = sqrt(n_total) / sqrt(n_i), then normalized to mean = 1.0
+# Rationale: Square-root of inverse-frequency flattens extreme weights and
+#            avoids overfitting on rare classes (common in medical/CV studies)
+
+# Random seed for reproducibility
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# Data settings for all_icu_ecgs dataset
+data:
+  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/all_icu_ecgs_P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # Preprocessing (same as baseline)
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  # Data augmentation (same as baseline)
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+
+# Training hyperparameters
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  # Optimizer
+  optimizer:
+    type: "Adam"
+    lr: 5e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  # Gradient clipping
+  gradient_clip_norm: 1.0
+  
+  # Dropout rate
+  dropout_rate: 0.3
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  # Loss function with class weights for all_icu_ecgs dataset (SQRT method)
+  loss:
+    type: "weighted_ce"
+    weight: [0.8, 0.5, 0.7, 0.8, 1.0, 1.2, 1.3, 1.5, 1.6, 0.6]
+  # Weights calculated based on training set distribution (61,663 samples):
+  # Class distribution: [7073, 15085, 9585, 6231, 4367, 2973, 2436, 1766, 1556, 10591]
+  # Method: Square-Root Weighting (SQINV)
+  #   Formula: w_i = sqrt(n_total) / sqrt(n_i)
+  # Normalized so mean = 1.0
+  # Class 0: 0.76 (7,073 samples, 11.47%)
+  # Class 1: 0.52 (15,085 samples, 24.46%)
+  # Class 2: 0.66 (9,585 samples, 15.54%)
+  # Class 3: 0.81 (6,231 samples, 10.10%)
+  # Class 4: 0.97 (4,367 samples, 7.08%)
+  # Class 5: 1.18 (2,973 samples, 4.82%)
+  # Class 6: 1.30 (2,436 samples, 3.95%)
+  # Class 7: 1.53 (1,766 samples, 2.86%)
+  # Class 8: 1.63 (1,556 samples, 2.52%)
+  # Class 9: 0.62 (10,591 samples, 17.18%)
+    # 
+    # Comparison: SQRT method reduces weight range compared to balanced weighting
+    # This should prevent the model from being too conservative and improve
+    # learning of minority classes without extreme overfitting
+
+# Validation settings
+validation:
+  val_split: 0.1  # 10% for 80-10-10 split
+  val_frequency: 1
+
+# Test settings
+test_split: 0.1  # 10% for 80-10-10 split
+
+# Early stopping
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"
+  mode: "min"
+
+# Checkpointing
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+# Logging
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - "accuracy"
+    - "f1_score"
+    - "precision"
+    - "recall"
+    - "auc_roc"
+    - "auc_pr"
+

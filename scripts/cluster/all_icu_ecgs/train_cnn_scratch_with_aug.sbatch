@@ -2,7 +2,7 @@
 #SBATCH --job-name=cnn_scratch_aug
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=04:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -38,7 +38,7 @@ source venv/bin/activate
 # 3. ENVIRONMENT VARIABLES SETZEN
 # WICHTIG: Passe den ABSOLUTEN Pfad zu icustays.csv an!
 # Beispiel: export ICUSTAYS_PATH="/work/<username>/data/icustays.csv"
-export ICUSTAYS_PATH="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/icustays.csv"
+export ICUSTAYS_PATH="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/labeling/labels_csv/icustays.csv"
 
 # Optional: DATA_DIR setzen (falls benötigt)
 # export DATA_DIR="/path/to/data"
@@ -58,7 +58,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 cd "${SLURM_SUBMIT_DIR}"
 
 # Training starten (WITH augmentation)
-python scripts/training/train_cnn_scratch_with_aug.py
+python scripts/training/cnn_from_scratch/all_icu_ecgs/train_cnn_scratch_with_aug.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -112,4 +112,3 @@ echo "Checkpoints verfügbar in: outputs/checkpoints/"
 
 # Exit mit Training-Exit-Code
 exit $TRAINING_EXIT_CODE
-

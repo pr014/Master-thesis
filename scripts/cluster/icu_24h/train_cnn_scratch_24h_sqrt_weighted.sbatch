@@ -45,7 +45,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 cd "${SLURM_SUBMIT_DIR}"
 
 # Training starten mit SQRT weighted config
-python scripts/training/train_cnn_scratch_24h_sqrt_weighted.py
+python scripts/training/cnn_from_scratch/icu_24h/train_cnn_scratch_24h_sqrt_weighted.py
 
 TRAINING_EXIT_CODE=$?
 

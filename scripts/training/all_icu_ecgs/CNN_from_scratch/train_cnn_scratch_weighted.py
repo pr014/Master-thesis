@@ -1,4 +1,7 @@
-"""Training script for CNN from scratch with LOS bin classification."""
+"""Training script for CNN from scratch with LOS bin classification.
+This script uses class weights specifically calculated for the all_icu_ecgs dataset.
+Config: configs/all_icu_ecgs/weighted/balanced_weights.yaml (balanced method)
+"""
 
 from pathlib import Path
 import sys
@@ -16,10 +19,9 @@ from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function."""
-    # Load configs
-    # Use baseline_no_aug.yaml for true baseline training (no augmentation, no class weights)
-    base_config_path = Path("configs/baseline_no_aug.yaml")
+    """Main training function for all_icu_ecgs dataset with class weights."""
+    # Load configs - using all_icu_ecgs weighted config (balanced method)
+    base_config_path = Path("configs/all_icu_ecgs/weighted/balanced_weights.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -27,14 +29,16 @@ def main():
         model_config_path=model_config_path,
     )
     
-    # Log config paths for tracking
     print("="*60)
-    print("Training Configuration")
+    print("Training CNN with Class Weights for All ICU ECGs Dataset (Balanced Method)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
+    if 'weight' in config.get('training', {}).get('loss', {}):
+        weights = config.get('training', {}).get('loss', {}).get('weight', [])
+        print(f"Class weights: {weights}")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -44,7 +48,7 @@ def main():
         # Try relative to data_dir
         data_dir = config.get("data", {}).get("data_dir", "")
         if data_dir:
-            icustays_path = Path(data_dir).parent / "labeling" / "labels_csv" / "icustays.csv"
+            icustays_path = Path(data_dir).parent.parent / "labeling" / "labels_csv" / "icustays.csv"
         else:
             # Default fallback (relative to project root)
             icustays_path = Path("data/labeling/labels_csv/icustays.csv")
@@ -53,7 +57,7 @@ def main():
     if not icustays_path.exists():
         raise FileNotFoundError(
             f"icustays.csv not found at: {icustays_path}\n"
-            f"Set ICUSTAYS_PATH environment variable or place icustays.csv in data directory."
+            f"Set ICUSTAYS_PATH environment variable or place icustays.csv in data/labeling directory."
         )
     
     print(f"Loading ICU stays from: {icustays_path}")
@@ -118,7 +122,7 @@ def main():
             if best_model_path.exists():
                 print(f"Loading best model from: {best_model_path}")
                 checkpoint = torch.load(best_model_path, map_location=trainer.device)
-                model.load_state_dict(checkpoint["model_state_dict"])
+                trainer.model.load_state_dict(checkpoint["model_state_dict"])
                 print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
             else:
                 print(f"Warning: Best model checkpoint not found at {best_model_path}. Using current model state.")
@@ -141,49 +145,33 @@ def main():
             num_classes=num_classes,
         )
         
-        # Print formatted test results summary
-        print("\n" + "=" * 80)
-        print("📊 TRAINING RESULTS SUMMARY")
-        print("=" * 80)
-        
-        # Model Performance
-        best_val_loss = min(history.get('val_loss', [float('inf')]))
-        print("\n🔹 Model Performance:")
-        print(f"   Best Validation Loss: {best_val_loss:.4f}")
-        print(f"   Test Loss:            {test_metrics['loss']:.4f}")
-        print(f"   Test Accuracy:        {test_metrics['accuracy']:.4f} ({test_metrics['accuracy']*100:.2f}%)")
-        print(f"   Balanced Accuracy:    {test_metrics['balanced_accuracy']:.4f} ({test_metrics['balanced_accuracy']*100:.2f}%)")
-        print(f"   Macro Precision:      {test_metrics['macro_precision']:.4f}")
-        print(f"   Macro Recall:         {test_metrics['macro_recall']:.4f}")
-        print(f"   Macro F1-Score:       {test_metrics['macro_f1']:.4f}")
-        print(f"   Test ICU Stays:       {test_metrics['num_stays']:,}")
+        # Print test results
+        print("\nTest Set Results:")
+        print(f"  Test Loss: {test_metrics['loss']:.4f}")
+        print(f"  Test Accuracy: {test_metrics['accuracy']:.4f} ({test_metrics['accuracy']*100:.2f}%)")
+        print(f"  Balanced Accuracy: {test_metrics['balanced_accuracy']:.4f} ({test_metrics['balanced_accuracy']*100:.2f}%)")
+        print(f"  Macro Precision: {test_metrics['macro_precision']:.4f}")
+        print(f"  Macro Recall: {test_metrics['macro_recall']:.4f}")
+        print(f"  Macro F1-Score: {test_metrics['macro_f1']:.4f}")
+        print(f"  Number of ICU stays evaluated: {test_metrics['num_stays']}")
         
         # Per-class metrics
-        print("\n🔹 Per-Class Metrics:")
-        print(f"   {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
-        print("   " + "-" * 44)
+        print("\n  Per-Class Metrics:")
+        print(f"    {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
+        print("    " + "-" * 44)
         for cls in range(num_classes):
-            print(f"   {cls:<8} {test_metrics['per_class_precision'][cls]:<12.4f} "
+            print(f"    {cls:<8} {test_metrics['per_class_precision'][cls]:<12.4f} "
                   f"{test_metrics['per_class_recall'][cls]:<12.4f} "
                   f"{test_metrics['per_class_f1'][cls]:<12.4f}")
         
         # Confusion Matrix
         if test_metrics['confusion_matrix'] is not None:
             cm = np.array(test_metrics['confusion_matrix'])
-            print("\n🔹 Confusion Matrix:")
-            print("   " + " ".join([f"{i:>6}" for i in range(num_classes)]))
+            print("\n  Confusion Matrix:")
+            print("    " + " ".join([f"{i:>6}" for i in range(num_classes)]))
             for i in range(num_classes):
-                row_str = f"   {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
+                row_str = f"  {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
                 print(row_str)
-        
-        # Checkpoint info
-        print("\n" + "=" * 80)
-        if trainer.job_id:
-            checkpoint_path = f"outputs/checkpoints/{model_name}_best_{trainer.job_id}.pt"
-            print(f"✅ Checkpoints: {checkpoint_path}")
-        else:
-            print("✅ Checkpoints: outputs/checkpoints/<MODEL_NAME>_best_<JOB_ID>.pt")
-        print("=" * 80)
         
         # Add test metrics to history
         history["test_loss"] = test_metrics["loss"]

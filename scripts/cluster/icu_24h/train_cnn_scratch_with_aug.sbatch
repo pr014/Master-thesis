@@ -58,7 +58,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 cd "${SLURM_SUBMIT_DIR}"
 
 # Training starten (WITH augmentation)
-python scripts/training/train_cnn_scratch_with_aug.py
+python scripts/training/cnn_from_scratch/icu_24h/train_cnn_scratch_with_aug.py
 
 TRAINING_EXIT_CODE=$?
 

@@ -1,4 +1,5 @@
-"""Training script for CNN from scratch with LOS bin classification."""
+"""Training script for CNN from scratch with LOS bin classification.
+For all_icu_ecgs dataset without augmentation."""
 
 from pathlib import Path
 import sys
@@ -16,10 +17,10 @@ from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function."""
+    """Main training function for all_icu_ecgs dataset."""
     # Load configs
     # Use baseline_no_aug.yaml for true baseline training (no augmentation, no class weights)
-    base_config_path = Path("configs/baseline_no_aug.yaml")
+    base_config_path = Path("configs/all_icu_ecgs/baseline_no_aug.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -29,7 +30,7 @@ def main():
     
     # Log config paths for tracking
     print("="*60)
-    print("Training Configuration")
+    print("Training Configuration - All ICU ECGs Dataset (No Augmentation)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
@@ -44,7 +45,7 @@ def main():
         # Try relative to data_dir
         data_dir = config.get("data", {}).get("data_dir", "")
         if data_dir:
-            icustays_path = Path(data_dir).parent / "labeling" / "labels_csv" / "icustays.csv"
+            icustays_path = Path(data_dir).parent.parent / "labeling" / "labels_csv" / "icustays.csv"
         else:
             # Default fallback (relative to project root)
             icustays_path = Path("data/labeling/labels_csv/icustays.csv")
@@ -53,7 +54,7 @@ def main():
     if not icustays_path.exists():
         raise FileNotFoundError(
             f"icustays.csv not found at: {icustays_path}\n"
-            f"Set ICUSTAYS_PATH environment variable or place icustays.csv in data directory."
+            f"Set ICUSTAYS_PATH environment variable or place icustays.csv in data/labeling directory."
         )
     
     print(f"Loading ICU stays from: {icustays_path}")

@@ -1,0 +1,126 @@
+# Baseline configuration for all model architectures
+# This file contains common hyperparameters to ensure comparability across models
+# All model-specific configs should inherit/merge with this baseline
+#
+# Notes:
+# - Use same optimizer and schedule for CNN, LSTM, CNN-LSTM, Transformer
+# - Keep same number of training steps and early stopping configuration
+# - Monitor validation AUC for mortality, RMSE/MAE for length of stay
+# - Set random seeds for reproducibility across architectures
+
+# Random seed for reproducibility (same across all models)
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# Data settings (common for all models)
+data:
+  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/all_icu_ecgs_P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # Preprocessing (same for all models)
+  # Pipeline order: Resampling → Bandpass Filtering → Segmentation → Normalization
+  preprocessing:
+    target_sampling_rate: 500.0  # Resample to 500 Hz
+    window_seconds: 10.0  # Segment to 10 seconds (5000 samples at 500 Hz)
+    filter_type: "bandpass"  # Bandpass filter (0.5-50 Hz, Butterworth 4th order)
+    filter_lowcut: 0.5  # Low cutoff frequency in Hz
+    filter_highcut: 50.0  # High cutoff frequency in Hz
+    filter_order: 4  # Butterworth filter order
+    normalize: "zscore"  # Z-score normalization per lead
+    # Segmentation: Zero-padding for shorter signals, center crop for longer signals
+  
+  # Data augmentation (same for all models)
+  # Applied only during training, not for validation/test
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03  # Noise std as fraction of signal std
+    amplitude_scaling: true
+    scale_min: 0.85  # Minimum scaling factor
+    scale_max: 1.15  # Maximum scaling factor
+    baseline_wander: true
+    freq_min: 0.15   # Minimum frequency in Hz
+    freq_max: 0.4    # Maximum frequency in Hz
+    amp_min: 0.03    # Minimum amplitude in mV
+    amp_max: 0.08    # Maximum amplitude in mV
+    # Future options (not implemented yet):
+    # time_warping: false
+    # lead_dropout: false
+
+# Training hyperparameters (same for all models for fair comparison)
+training:
+  batch_size: 64
+  num_epochs: 50  # max_epochs
+  num_workers: 4  # DataLoader workers
+  pin_memory: true
+  
+  # Optimizer (same for all models)
+  optimizer:
+    type: "Adam"
+    lr: 5e-4  # learning_rate
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]  # Adam betas
+  
+  # Gradient clipping
+  gradient_clip_norm: 1.0
+  
+  # Dropout rate (applied in model architectures)
+  dropout_rate: 0.3
+  
+  # Learning rate scheduler (same for all models)
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  # Loss function (same for all models)
+  loss:
+    type: "cross_entropy"  # "cross_entropy", "focal", "weighted_ce"
+    # Add loss-specific parameters here if needed
+
+# Validation settings (same for all models)
+validation:
+  val_split: 0.1  # Fraction of data for validation (10% for 80-10-10 split)
+  val_frequency: 1  # Validate every N epochs
+
+# Test settings (same for all models)
+test_split: 0.1  # Fraction of data for testing (10% for 80-10-10 split)
+
+# Early stopping (same for all models)
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"  # Options: "val_loss" or "val_auc" (use "val_auc" for mortality, "val_loss" for regression)
+  mode: "min"  # "min" for loss, "max" for AUC
+  # Note: For mortality prediction, monitor "val_auc" with mode "max"
+  # For length of stay, monitor "val_loss" (RMSE/MAE) with mode "min"
+
+# Checkpointing (same for all models)
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1  # Save checkpoint every N epochs
+  save_best: true  # Save best model based on validation metric
+  metric: "val_loss"  # Metric to track for best model
+
+# Logging (same for all models)
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10  # Log every N batches
+
+# Evaluation metrics (same for all models)
+evaluation:
+  metrics:
+    - "accuracy"
+    - "f1_score"
+    - "precision"
+    - "recall"
+    - "auc_roc"
+    - "auc_pr"

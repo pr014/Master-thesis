@@ -338,7 +338,7 @@ RuntimeError: Expected all tensors to be on the same device, but got weight is o
 In der Test-Evaluation wird eine neue Loss-Funktion erstellt (`criterion = get_loss(config)`), die Weights auf CPU hat.
 
 **Lösung:**
-In `scripts/training/train_cnn_scratch_24h_weighted.py` (und `train_cnn_scratch.py`):
+In `scripts/training/cnn_from_scratch/icu_24h/train_cnn_scratch_24h_weighted.py` (und `train_cnn_scratch.py`):
 ```python
 # FALSCH:
 criterion = get_loss(config)  # Neue Loss mit CPU-Weights

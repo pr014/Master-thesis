@@ -48,10 +48,10 @@ def main():
         # Try relative to data_dir
         data_dir = config.get("data", {}).get("data_dir", "")
         if data_dir:
-            icustays_path = Path(data_dir).parent / "icustays.csv"
+            icustays_path = Path(data_dir).parent / "labeling" / "labels_csv" / "icustays.csv"
         else:
             # Default fallback (relative to project root)
-            icustays_path = Path("data/icustays.csv")
+            icustays_path = Path("data/labeling/labels_csv/icustays.csv")
     
     icustays_path = Path(icustays_path)
     if not icustays_path.exists():
