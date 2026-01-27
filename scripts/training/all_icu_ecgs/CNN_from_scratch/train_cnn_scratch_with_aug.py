@@ -10,9 +10,11 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import CNNScratch
+from src.models.multi_task_model import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
-from src.data.labeling import load_icustays, ICUStayMapper
+from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from src.training import Trainer
+from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
@@ -60,8 +62,42 @@ def main():
     
     print(f"Loading ICU stays from: {icustays_path}")
     icustays_df = load_icustays(str(icustays_path))
-    icu_mapper = ICUStayMapper(icustays_df)
     print(f"Loaded {len(icustays_df)} ICU stays")
+    
+    # Check if multi-task is enabled
+    multi_task_config = config.get("multi_task", {})
+    is_multi_task = multi_task_config.get("enabled", False)
+    
+    # Load mortality mapping if multi-task is enabled
+    mortality_mapping = None
+    if is_multi_task:
+        admissions_path = multi_task_config.get("admissions_path", "data/labeling/labels_csv/admissions.csv")
+        admissions_path = Path(admissions_path)
+        
+        # Try to resolve relative path
+        if not admissions_path.is_absolute():
+            # Try relative to project root
+            project_root = Path(__file__).parent.parent.parent.parent
+            admissions_path = project_root / admissions_path
+        
+        if not admissions_path.exists():
+            # Try relative to data_dir
+            data_dir = config.get("data", {}).get("data_dir", "")
+            if data_dir:
+                admissions_path = Path(data_dir).parent.parent / "labeling" / "labels_csv" / "admissions.csv"
+        
+        if not admissions_path.exists():
+            raise FileNotFoundError(
+                f"admissions.csv not found for multi-task learning at: {admissions_path}\n"
+                f"Set multi_task.admissions_path in config or place admissions.csv in data/labeling directory."
+            )
+        
+        print(f"Loading admissions from: {admissions_path}")
+        mortality_mapping = load_mortality_mapping(str(admissions_path), icustays_df)
+        print(f"Loaded mortality mapping: {sum(mortality_mapping.values())} died, {len(mortality_mapping) - sum(mortality_mapping.values())} survived")
+    
+    # Create ICU mapper with mortality mapping
+    icu_mapper = ICUStayMapper(icustays_df, mortality_mapping=mortality_mapping)
     
     # Create DataLoaders (labels will be auto-generated via icu_mapper)
     train_loader, val_loader, test_loader = create_dataloaders(
@@ -70,10 +106,27 @@ def main():
         preprocess=None,
         transform=None,
         icu_mapper=icu_mapper,
+        mortality_labels=None,  # Will be auto-generated from mortality_mapping
     )
     
-    # Create model
-    model = CNNScratch(config)
+    # Create base model
+    base_model = CNNScratch(config)
+    
+    # Wrap in MultiTaskECGModel if multi-task is enabled
+    if is_multi_task:
+        print("Creating Multi-Task model (LOS + Mortality)...")
+        model = MultiTaskECGModel(base_model, config)
+        print(f"Multi-Task model created with {model.count_parameters():,} parameters")
+    else:
+        model = base_model
+    
+    # Create loss function
+    if is_multi_task:
+        criterion = get_multi_task_loss(config)
+        print("Using Multi-Task Loss (LOS + Mortality)")
+    else:
+        criterion = get_loss(config)
+        print("Using Single-Task Loss (LOS only)")
     
     # Create trainer
     trainer = Trainer(
@@ -81,6 +134,7 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
+        criterion=criterion,  # Pass custom criterion if multi-task
     )
     
     # Store config paths for checkpoint saving

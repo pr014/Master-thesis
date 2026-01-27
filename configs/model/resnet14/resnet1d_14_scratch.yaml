@@ -1,4 +1,4 @@
-# ResNet1D-14 model-specific configuration
+# ResNet1D-14 model-specific configuration (Training from Scratch)
 # Merges with baseline.yaml
 # Only ResNet1D-14-specific overrides go here
 
@@ -8,4 +8,8 @@ model:
   
   # ResNet1D-14-specific architecture parameters (if needed in future)
   # Currently using fixed architecture, can be made configurable later
+  
+  # Pretrained weights configuration
+  pretrained:
+    enabled: false  # Train from scratch (no pretrained weights)
 

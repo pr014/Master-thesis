@@ -24,6 +24,7 @@ class Trainer:
         val_loader: DataLoader,
         config: Dict[str, Any],
         device: Optional[torch.device] = None,
+        criterion: Optional[nn.Module] = None,
     ):
         """Initialize trainer.
         
@@ -33,6 +34,7 @@ class Trainer:
             val_loader: Validation data loader.
             config: Configuration dictionary.
             device: Device to train on (auto-detected if None).
+            criterion: Optional loss function (if None, will be created from config).
         """
         self.model = model
         self.train_loader = train_loader
@@ -59,8 +61,11 @@ class Trainer:
         # Setup scheduler
         self.scheduler = self._create_scheduler()
         
-        # Setup loss
-        self.criterion = get_loss(config)
+        # Setup loss (use provided criterion or create from config)
+        if criterion is not None:
+            self.criterion = criterion
+        else:
+            self.criterion = get_loss(config)
         
         # Move loss weights to device if they exist
         if hasattr(self.criterion, 'weight') and self.criterion.weight is not None:
@@ -87,9 +92,13 @@ class Trainer:
         self.current_epoch = 0
         self.history = {
             "train_loss": [],
-            "train_acc": [],
+            "train_los_acc": [],
             "val_loss": [],
-            "val_acc": [],
+            "val_los_acc": [],
+            # Optional multi-task metrics (will be populated if present)
+            "train_mortality_acc": [],
+            "val_mortality_acc": [],
+            "val_mortality_auc": [],
         }
     
     def _create_optimizer(self) -> torch.optim.Optimizer:
@@ -226,10 +235,18 @@ class Trainer:
                 self.logger.info(
                     f"Epoch {epoch}/{num_epochs} - "
                     f"Train Loss: {train_metrics.get('train_loss', 0.0):.4f}, "
-                    f"Train Acc: {train_metrics.get('train_acc', 0.0):.4f}, "
+                    f"Train LOS Acc: {train_metrics.get('train_los_acc', 0.0):.4f}, "
                     f"Val Loss: {val_metrics.get('val_loss', 0.0):.4f}, "
-                    f"Val Acc: {val_metrics.get('val_acc', 0.0):.4f}"
+                    f"Val LOS Acc: {val_metrics.get('val_los_acc', 0.0):.4f}"
                 )
+
+                # Extra logging if mortality metrics are available
+                if "val_mortality_acc" in val_metrics or "val_mortality_auc" in val_metrics:
+                    self.logger.info(
+                        f"           Mortality - "
+                        f"Val Acc: {val_metrics.get('val_mortality_acc', 0.0):.4f}, "
+                        f"Val AUC: {val_metrics.get('val_mortality_auc', 0.0):.4f}"
+                    )
             
             # TensorBoard logging
             if self.tb_logger is not None:

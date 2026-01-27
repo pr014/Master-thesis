@@ -7,16 +7,19 @@
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
 #SBATCH --mem=16G               # RAM-Anforderung (16GB sollte für Batch-Size 64 reichen)
-#SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU)
+#SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU, jede verfügbare)
 #SBATCH --mail-type=BEGIN,END   # E-Mail bei Start und Ende
 #SBATCH --mail-user=zx9981@partner.kit.edu  # Deine E-Mail-Adresse
-#SBATCH --partition=gpu_a100_il  # GPU-Partition für Training
+#SBATCH --partition=gpu_a100_il,gpu_h100_il  # Flexible Partition: A100 oder H100
 
 # Print job information
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
+
+# Ensure we run from the submit directory (robust paths)
+cd "${SLURM_SUBMIT_DIR}"
 
 # ============================================================================
 # ANPASSUNGEN FÜR BW UNI CLUSTER 3.0:
@@ -36,9 +39,11 @@ source venv/bin/activate
 # conda activate ma-thesis
 
 # 3. ENVIRONMENT VARIABLES SETZEN
-# WICHTIG: Passe den ABSOLUTEN Pfad zu icustays.csv an!
-# Beispiel: export ICUSTAYS_PATH="/work/<username>/data/icustays.csv"
-export ICUSTAYS_PATH="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/icustays.csv"
+export ICUSTAYS_PATH="${SLURM_SUBMIT_DIR}/data/labeling/labels_csv/icustays.csv"
+if [ ! -f "${ICUSTAYS_PATH}" ]; then
+  echo "ERROR: icustays.csv not found at: ${ICUSTAYS_PATH}"
+  exit 1
+fi
 
 # Optional: DATA_DIR setzen (falls benötigt)
 # export DATA_DIR="/path/to/data"
@@ -54,11 +59,8 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN
 # ============================================================================
 
-# Wechsle ins Projekt-Verzeichnis (falls nicht schon dort)
-cd "${SLURM_SUBMIT_DIR}"
-
 # Training starten (WITH augmentation)
-python scripts/training/cnn_from_scratch/icu_24h/train_cnn_scratch_with_aug.py
+python scripts/training/icu_24h/train_cnn_scratch_with_aug.py
 
 TRAINING_EXIT_CODE=$?
 

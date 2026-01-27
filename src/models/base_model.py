@@ -86,3 +86,24 @@ class BaseECGModel(nn.Module, ABC):
             "num_classes": self.num_classes,
             "config": self.config,
         }
+    
+    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features from input without final classification head.
+        
+        This method is used for multi-task learning where we need features
+        before the final FC layer. Subclasses should override this method
+        if they want to support multi-task learning.
+        
+        Args:
+            x: Input tensor (same format as forward()).
+        
+        Returns:
+            features: Feature tensor of shape (B, feature_dim) before final FC layer.
+        
+        Raises:
+            NotImplementedError: If the model doesn't support feature extraction.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement get_features(). "
+            "This method is required for multi-task learning."
+        )

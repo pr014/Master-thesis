@@ -7,10 +7,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --gres=gpu:1
-#SBATCH --partition=gpu_a100_il
+#SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU, jede verfügbare)
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=zx9981@partner.kit.edu
+#SBATCH --partition=gpu_a100_il,gpu_h100_il  # Flexible Partition: A100 oder H100
 
 # Print job information
 echo "Job ID: $SLURM_JOB_ID"
@@ -18,6 +18,9 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
 echo "Training with Class Weights for 24h Dataset (Balanced Method)"
+
+# Ensure we run from the submit directory (robust paths)
+cd "${SLURM_SUBMIT_DIR}"
 
 # ============================================================================
 # BW UNI CLUSTER 3.0 SETUP:
@@ -31,7 +34,11 @@ module load devel/cuda/12.8
 source venv/bin/activate
 
 # 3. ENVIRONMENT VARIABLES SETZEN
-export ICUSTAYS_PATH="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/icustays.csv"
+export ICUSTAYS_PATH="${SLURM_SUBMIT_DIR}/data/labeling/labels_csv/icustays.csv"
+if [ ! -f "${ICUSTAYS_PATH}" ]; then
+  echo "ERROR: icustays.csv not found at: ${ICUSTAYS_PATH}"
+  exit 1
+fi
 export CUDA_VISIBLE_DEVICES=0
 
 # 4. PYTHON PATH SETZEN
@@ -41,11 +48,8 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN (24h Dataset with Class Weights)
 # ============================================================================
 
-# Wechsle ins Projekt-Verzeichnis
-cd "${SLURM_SUBMIT_DIR}"
-
 # Training starten mit weighted config
-python scripts/training/cnn_from_scratch/icu_24h/train_cnn_scratch_24h_weighted.py
+python scripts/training/icu_24h/train_cnn_scratch_24h_weighted.py
 
 TRAINING_EXIT_CODE=$?
 

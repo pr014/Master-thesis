@@ -20,7 +20,7 @@ def main():
     """Main training function for all_icu_ecgs dataset."""
     # Load configs
     base_config_path = Path("configs/all_icu_ecgs/baseline_with_aug.yaml")
-    model_config_path = Path("configs/model/pretrained_CNN/resnet1d_14.yaml")
+    model_config_path = Path("configs/model/resnet14/resnet1d_14_pretrained.yaml")
     
     config = load_config(
         base_config_path=base_config_path,

@@ -138,7 +138,7 @@ Alle Parameter in der `augmentation`-Sektion müssen auf derselben Einrückungse
 ### Problem: .npy Dateien werden nicht geladen
 **Symptom:**
 ```
-RuntimeError: No demo ECG records found in /path/to/preprocessed_24h_1
+RuntimeError: No demo ECG records found in /path/to/data/icu_ecgs_24h/P1
 ```
 
 **Lösung:**
@@ -437,8 +437,8 @@ python -c "from src.data.ecg import create_dataloaders; print('OK')"
 ### Daten prüfen:
 ```bash
 # Struktur prüfen
-ls preprocessed_24h_1/p1000/ | head -5
-find preprocessed_24h_1/p1000 -type f | head -5
+ls data/icu_ecgs_24h/P1/p1000/ | head -5
+find data/icu_ecgs_24h/P1/p1000 -type f | head -5
 
 # Labels prüfen
 python -c "
@@ -451,9 +451,9 @@ from src.data.ecg import create_dataloaders
 
 ## 📝 Wichtige Pfade (Server)
 
-- Projekt: `/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1`
-- Daten: `/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/preprocessed_24h_1`
-- icustays.csv: `/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/icustays.csv`
+- Projekt: `<project_root>`
+- Daten (24h, P1): `data/icu_ecgs_24h/P1`
+- icustays.csv: `data/labeling/labels_csv/icustays.csv`
 - E-Mail: `zx9981@partner.kit.edu`
 
 ---

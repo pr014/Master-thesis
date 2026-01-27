@@ -14,7 +14,7 @@ device:
 
 # Data settings for all_icu_ecgs dataset
 data:
-  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/all_icu_ecgs_P1"
+  data_dir: "data/all_icu_ecgs/P1"
   sampling_rate: 500.0  # Hz
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG

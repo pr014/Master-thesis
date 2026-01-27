@@ -122,4 +122,42 @@ class CNNScratch(BaseECGModel):
         x = self.fc2(x)
         
         return x
+    
+    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features before final classification head.
+        
+        Args:
+            x: Input tensor of shape (B, 12, 5000)
+        
+        Returns:
+            features: Feature tensor of shape (B, 64) after fc1 and before fc2.
+        """
+        # Conv Block 1
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.pool1(x)
+        
+        # Conv Block 2
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu(x)
+        x = self.pool2(x)
+        
+        # Conv Block 3
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.relu(x)
+        x = self.pool3(x)
+        
+        # Global Average Pooling
+        x = self.global_pool(x)  # (B, 128, 1)
+        x = x.squeeze(-1)  # (B, 128)
+        
+        # Classification Head (up to fc1)
+        x = self.dropout1(x)
+        x = self.fc1(x)
+        x = self.relu(x)
+        
+        return x  # (B, 64) - features before final fc2 layer
 

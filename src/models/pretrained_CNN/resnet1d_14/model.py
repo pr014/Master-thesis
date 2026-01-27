@@ -1,6 +1,7 @@
 """ResNet1D-14 model for ECG classification - shallow ResNet architecture."""
 
 from typing import Dict, Any
+from pathlib import Path
 import torch
 import torch.nn as nn
 from ...base_model import BaseECGModel
@@ -168,6 +169,115 @@ class ResNet1D14(BaseECGModel):
         # Classification Head
         self.dropout = nn.Dropout(dropout_rate)
         self.fc = nn.Linear(512, self.num_classes)
+        
+        # Load pretrained weights if enabled
+        self._load_pretrained_weights(config)
+    
+    def _load_pretrained_weights(self, config: Dict[str, Any]) -> None:
+        """Load pretrained weights from PTB-XL if enabled in config.
+        
+        Args:
+            config: Configuration dictionary. Should contain:
+                - model.pretrained.enabled: Whether to load pretrained weights
+                - model.pretrained.weights_path: Path to pretrained weights file
+                - model.pretrained.freeze_backbone: Whether to freeze backbone layers
+        """
+        pretrained_config = config.get("model", {}).get("pretrained", {})
+        enabled = pretrained_config.get("enabled", False)
+        
+        if not enabled:
+            return
+        
+        weights_path = pretrained_config.get("weights_path", "")
+        if not weights_path:
+            print("Warning: pretrained.enabled is True but weights_path is empty. Training from scratch.")
+            return
+        
+        # Resolve path (relative to project root or absolute)
+        weights_path = Path(weights_path)
+        if not weights_path.is_absolute():
+            # Try to find project root (go up from src/models/pretrained_CNN/resnet1d_14/)
+            project_root = Path(__file__).parent.parent.parent.parent.parent
+            weights_path = project_root / weights_path
+        
+        if not weights_path.exists():
+            print(f"Warning: Pretrained weights file not found at {weights_path}. Training from scratch.")
+            return
+        
+        try:
+            print(f"Loading pretrained weights from: {weights_path}")
+            checkpoint = torch.load(weights_path, map_location="cpu")
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                # Check if it's a full checkpoint with 'model_state_dict' or 'state_dict'
+                if "model_state_dict" in checkpoint:
+                    state_dict = checkpoint["model_state_dict"]
+                elif "state_dict" in checkpoint:
+                    state_dict = checkpoint["state_dict"]
+                else:
+                    # Assume the dict itself is the state_dict
+                    state_dict = checkpoint
+            else:
+                state_dict = checkpoint
+            
+            # Remove prefix if present (e.g., "model.", "backbone.")
+            cleaned_state_dict = {}
+            for key, value in state_dict.items():
+                # Remove common prefixes
+                new_key = key
+                for prefix in ["model.", "backbone.", "module."]:
+                    if new_key.startswith(prefix):
+                        new_key = new_key[len(prefix):]
+                        break
+                cleaned_state_dict[new_key] = value
+            
+            # Filter state dict to only include backbone layers (exclude fc and dropout)
+            model_state_dict = self.state_dict()
+            pretrained_state_dict = {}
+            skipped_keys = []
+            
+            for key, value in cleaned_state_dict.items():
+                # Skip classification head (fc, dropout)
+                if key.startswith("fc") or key.startswith("dropout"):
+                    skipped_keys.append(key)
+                    continue
+                
+                # Check if key exists in current model
+                if key in model_state_dict:
+                    # Check shape compatibility
+                    if model_state_dict[key].shape == value.shape:
+                        pretrained_state_dict[key] = value
+                    else:
+                        print(f"Warning: Shape mismatch for {key}: model {model_state_dict[key].shape} vs pretrained {value.shape}. Skipping.")
+                        skipped_keys.append(key)
+                else:
+                    skipped_keys.append(key)
+            
+            # Load pretrained weights
+            missing_keys, unexpected_keys = self.load_state_dict(pretrained_state_dict, strict=False)
+            
+            if pretrained_state_dict:
+                print(f"Successfully loaded {len(pretrained_state_dict)} pretrained layers.")
+                if skipped_keys:
+                    print(f"Skipped {len(skipped_keys)} layers (classification head or incompatible shapes).")
+                if missing_keys:
+                    print(f"Warning: {len(missing_keys)} model layers were not found in pretrained weights (will use random initialization).")
+            else:
+                print("Warning: No compatible pretrained weights found. Training from scratch.")
+            
+            # Freeze backbone if requested
+            freeze_backbone = pretrained_config.get("freeze_backbone", False)
+            if freeze_backbone:
+                print("Freezing backbone layers (only classification head will be trained).")
+                for name, param in self.named_parameters():
+                    # Freeze all except fc layer
+                    if not name.startswith("fc"):
+                        param.requires_grad = False
+                        
+        except Exception as e:
+            print(f"Error loading pretrained weights: {e}")
+            print("Training from scratch.")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
@@ -199,4 +309,34 @@ class ResNet1D14(BaseECGModel):
         x = self.fc(x)
         
         return x
+    
+    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features before final classification head.
+        
+        Args:
+            x: Input tensor of shape (B, 12, 5000)
+        
+        Returns:
+            features: Feature tensor of shape (B, 512) after global pooling and before fc.
+        """
+        # Initial conv layer
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        
+        # Residual blocks
+        x = self.layer1(x)  # (B, 64, 1250)
+        x = self.layer2(x)  # (B, 128, 625)
+        x = self.layer3(x)  # (B, 256, 313)
+        x = self.layer4(x)  # (B, 512, 157)
+        
+        # Global Average Pooling
+        x = self.global_pool(x)  # (B, 512, 1)
+        x = x.squeeze(-1)  # (B, 512)
+        
+        # Apply dropout but not final FC layer
+        x = self.dropout(x)
+        
+        return x  # (B, 512) - features before final fc layer
 

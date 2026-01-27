@@ -233,7 +233,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/all_icu_ecgs_P1",
+        default="data/all_icu_ecgs/P1",
         help="Path to dataset directory"
     )
     parser.add_argument(

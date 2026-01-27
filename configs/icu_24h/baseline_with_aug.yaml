@@ -18,7 +18,7 @@ device:
 
 # Data settings (common for all models)
 data:
-  data_dir: "/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/preprocessed_24h_1"
+  data_dir: "data/icu_ecgs_24h/P1"
   sampling_rate: 500.0  # Hz
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
@@ -124,3 +124,12 @@ evaluation:
     - "recall"
     - "auc_roc"
     - "auc_pr"
+
+# Multi-task learning settings (LOS + Mortality)
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"  # Path to admissions.csv for mortality labels
+  los_loss_weight: 1.0  # Weight for LOS classification loss
+  mortality_loss_weight: 1.0  # Weight for mortality prediction loss
+  mortality_use_weighted_loss: false  # Use weighted BCE for mortality (if class imbalance)
+  mortality_pos_weight: null  # Positive class weight for mortality (auto-calculated if null and weighted_loss=true)

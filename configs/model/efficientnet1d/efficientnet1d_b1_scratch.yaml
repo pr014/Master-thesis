@@ -1,0 +1,16 @@
+# EfficientNet1D-B1 model-specific configuration (Training from Scratch)
+# Merges with baseline.yaml
+# Only EfficientNet1D-B1-specific overrides go here
+
+model:
+  type: "EfficientNet1D_B1"
+  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+  
+  # EfficientNet1D-B1-specific architecture parameters
+  # Architecture follows EfficientNet-B1 paper (Tan & Le, 2019)
+  # ~7.8M parameters
+  
+  # Pretrained weights configuration
+  pretrained:
+    enabled: false  # Train from scratch (no pretrained weights)
+

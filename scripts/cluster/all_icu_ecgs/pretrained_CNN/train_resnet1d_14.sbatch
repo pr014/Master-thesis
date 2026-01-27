@@ -10,13 +10,16 @@
 #SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU)
 #SBATCH --mail-type=BEGIN,END   # E-Mail bei Start und Ende
 #SBATCH --mail-user=zx9981@partner.kit.edu  # Deine E-Mail-Adresse
-#SBATCH --partition=gpu_a100_il  # GPU-Partition für Training
+#SBATCH --partition=gpu_a100_il,gpu_h100_il  # GPU-Partition für Training (flexibel)
 
 # Print job information
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
+
+# Ensure we run from project root
+cd "${SLURM_SUBMIT_DIR}"
 
 # ============================================================================
 # ANPASSUNGEN FÜR BW UNI CLUSTER 3.0:
@@ -36,9 +39,12 @@ source venv/bin/activate
 # conda activate ma-thesis
 
 # 3. ENVIRONMENT VARIABLES SETZEN
-# WICHTIG: Passe den ABSOLUTEN Pfad zu icustays.csv an!
-# Beispiel: export ICUSTAYS_PATH="/work/<username>/data/icustays.csv"
-export ICUSTAYS_PATH="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1/data/labeling/labels_csv/icustays.csv"
+# icustays.csv (robust via submit dir)
+export ICUSTAYS_PATH="${SLURM_SUBMIT_DIR}/data/labeling/labels_csv/icustays.csv"
+if [ ! -f "${ICUSTAYS_PATH}" ]; then
+  echo "ERROR: icustays.csv not found at: ${ICUSTAYS_PATH}"
+  exit 1
+fi
 
 # Optional: DATA_DIR setzen (falls benötigt)
 # export DATA_DIR="/path/to/data"
@@ -53,9 +59,6 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 # TRAINING STARTEN
 # ============================================================================
-
-# Wechsle ins Projekt-Verzeichnis (falls nicht schon dort)
-cd "${SLURM_SUBMIT_DIR}"
 
 # Training starten
 python scripts/training/all_icu_ecgs/pretrained_CNN/train_resnet1d_14.py
