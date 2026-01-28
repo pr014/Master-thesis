@@ -9,7 +9,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import CNNScratch
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from src.training import Trainer

@@ -4,11 +4,11 @@ Based on FastAI xResNet architecture, adapted for 1D ECG signals.
 Pretrained weights from PTB-XL dataset.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 import torch
 import torch.nn as nn
-from ...base_model import BaseECGModel
+from ...core.base_model import BaseECGModel
 from .blocks import XResNetBlock1D
 
 
@@ -166,7 +166,20 @@ class XResNet1D101(BaseECGModel):
         # Ours: BatchNorm(512) → Dropout → Linear(512 → num_classes)
         self.bn_final = nn.BatchNorm1d(512)
         self.dropout = nn.Dropout(dropout_rate)
-        self.fc = nn.Linear(512, self.num_classes)
+        
+        # Check if demographic features are enabled
+        data_config = config.get("data", {})
+        demographic_config = data_config.get("demographic_features", {})
+        self.use_demographics = demographic_config.get("enabled", False)
+        
+        # Calculate feature dimension (ECG features + optional demographic features)
+        feature_dim = 512  # ECG features after global pooling
+        if self.use_demographics:
+            sex_encoding = demographic_config.get("sex_encoding", "binary")
+            demo_dim = 2 if sex_encoding == "binary" else 3  # binary: [age, sex], onehot: [age, sex_0, sex_1]
+            feature_dim += demo_dim
+        
+        self.fc = nn.Linear(feature_dim, self.num_classes)
         
         # Load pretrained weights if enabled
         self._load_pretrained_weights(config)
@@ -356,11 +369,13 @@ class XResNet1D101(BaseECGModel):
             traceback.print_exc()
             print("Training from scratch.")
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Forward pass.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
         
         Returns:
             logits: Output logits of shape (B, num_classes)
@@ -382,20 +397,31 @@ class XResNet1D101(BaseECGModel):
         x = x.squeeze(-1)  # (B, 512)
         
         # Head
-        x = self.bn_final(x)
-        x = self.dropout(x)
+        ecg_features = self.bn_final(x)  # (B, 512)
+        
+        # Late fusion: Concatenate ECG features with demographic features
+        if self.use_demographics and demographic_features is not None:
+            # Concatenate: [ECG features, demographic features]
+            fused_features = torch.cat([ecg_features, demographic_features], dim=1)  # (B, 512+2 or 512+3)
+        else:
+            fused_features = ecg_features
+        
+        x = self.dropout(fused_features)
         x = self.fc(x)  # (B, num_classes)
         
         return x
     
-    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Extract features before final classification head.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
         
         Returns:
-            features: Feature tensor of shape (B, 256) after global pooling and before fc.
+            features: Feature tensor of shape (B, 512) or (B, 514/515) after fusion.
+                     If demographic features are enabled, includes demographic features.
         """
         # Stem
         x = self.stem(x)  # (B, 64, 5000)
@@ -414,8 +440,17 @@ class XResNet1D101(BaseECGModel):
         x = x.squeeze(-1)  # (B, 512)
         
         # Apply BN and dropout but not final FC layer
-        x = self.bn_final(x)
-        x = self.dropout(x)
+        ecg_features = self.bn_final(x)  # (B, 512)
         
-        return x  # (B, 512) - features before final fc layer
+        # Late fusion: Concatenate ECG features with demographic features
+        if self.use_demographics and demographic_features is not None:
+            # Concatenate: [ECG features, demographic features]
+            fused_features = torch.cat([ecg_features, demographic_features], dim=1)  # (B, 512+2 or 512+3)
+        else:
+            fused_features = ecg_features
+        
+        # Apply dropout but not final FC layer
+        fused_features = self.dropout(fused_features)
+        
+        return fused_features  # (B, 512) or (B, 514/515) - features before final fc layer
 

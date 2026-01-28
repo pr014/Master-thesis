@@ -1,6 +1,6 @@
 """Training script for CNN from scratch with LOS bin classification.
-This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/24h_weighted/balanced_weights.yaml (balanced method)
+This script uses class weights calculated with Square-Root Weighting (SQINV) method.
+Config: configs/24h_weighted/sqrt_weights.yaml
 """
 
 from pathlib import Path
@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import CNNScratch
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from src.training import Trainer
@@ -21,9 +21,9 @@ from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights."""
-    # Load configs - using 24h weighted config (balanced method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/balanced_weights.yaml")
+    """Main training function for 24h dataset with SQRT class weights."""
+    # Load configs - using 24h weighted config (SQRT method)
+    base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -32,7 +32,7 @@ def main():
     )
     
     print("="*60)
-    print("Training CNN with Class Weights for 24h Dataset")
+    print("Training CNN with SQRT Class Weights for 24h Dataset")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
@@ -40,7 +40,7 @@ def main():
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights: {weights}")
+        print(f"Class weights (SQRT): {weights}")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -169,7 +169,6 @@ def main():
         print("="*60)
         
         from src.training.train_loop import evaluate_with_detailed_metrics
-        from src.training.losses import get_loss
         import numpy as np
         
         # Load best model checkpoint (use job_id version if available)
@@ -281,3 +280,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

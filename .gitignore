@@ -80,3 +80,6 @@ Thumbs.db
 # Große CSV-Dateien (falls vorhanden, aber kleine Config-CSVs bleiben)
 # Nur sehr große CSVs ignorieren - kleine bleiben erhalten
 # data/*.csv wird durch data/ bereits ignoriert
+
+# Documentation (local only, not tracked in Git)
+docs/

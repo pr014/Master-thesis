@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import ResNet1D14
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss

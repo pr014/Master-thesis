@@ -1,0 +1,20 @@
+# LSTM1D Bidirectional model-specific configuration (1-Layer)
+# Merges with baseline.yaml
+# Only LSTM1D_Bidirectional-specific overrides go here
+
+model:
+  type: "LSTM1D_Bidirectional"
+  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+  
+  # LSTM-specific architecture parameters
+  # Architecture: Bidirectional LSTM for ECG time series classification
+  # Hidden dimension: 128 per direction → 256 total (same output size as unidirectional with 256)
+  # ~300K parameters (1 layer) or ~900K parameters (2 layers)
+  
+  hidden_dim: 128  # Hidden dimension per direction (forward + backward = 256 total)
+  num_layers: 1  # Number of LSTM layers
+  dropout: 0.3  # Dropout between LSTM layers (only if num_layers > 1)
+  bidirectional: true  # Bidirectional LSTM (enforced in model)
+  pooling: "last"  # Pooling strategy: "last", "mean", or "max"
+  use_embedding: false  # Whether to use embedding layer (12 → hidden_dim)
+

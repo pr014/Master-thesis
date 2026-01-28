@@ -1,0 +1,21 @@
+# Demographic Features Configuration
+# Optional feature: Age & Sex as additional inputs to improve model performance
+# This config can be merged with any base config via experiment_config_path
+
+data:
+  demographic_features:
+    enabled: false  # Set to false to disable (or don't load this config)
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    
+    # Age normalization
+    age_normalization: "minmax"  # "minmax" (0-1), "zscore" (mean=0, std=1), or "none"
+    age_min: 0  # Minimum age for minmax normalization (auto-calculated from training data if not set)
+    age_max: 120  # Maximum age for minmax normalization (auto-calculated from training data if not set)
+    
+    # Sex encoding
+    sex_encoding: "binary"  # "binary" (M=0, F=1) or "onehot" ([1,0] for M, [0,1] for F)
+    
+    # Handling of missing values
+    missing_age_strategy: "median"  # "median" (use median age), "zero" (use 0), or "skip" (skip sample)
+    missing_sex_strategy: "default"  # "default" (use most common: M=0), "skip" (skip sample)
+

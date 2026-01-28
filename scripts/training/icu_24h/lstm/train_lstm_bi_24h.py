@@ -1,4 +1,4 @@
-"""Training script for EfficientNet1D-B1 with LOS bin classification.
+"""Training script for LSTM1D Bidirectional with LOS bin classification.
 This script uses class weights specifically calculated for the 24h ECG dataset.
 Config: configs/icu_24h/24h_weighted/sqrt_weights.yaml (sqrt method)
 """
@@ -11,7 +11,7 @@ import torch
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from src.models import EfficientNet1D_B1
+from src.models.lstm import LSTM1D_Bidirectional
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
@@ -23,15 +23,23 @@ def main():
     """Main training function for 24h dataset with class weights."""
     # Load configs - using 24h weighted config (sqrt method)
     base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-    model_config_path = Path("configs/model/efficientnet1d/efficientnet1d_b1_scratch.yaml")
+    model_config_path = Path("configs/model/lstm/bidirectional/lstm_bi_1layer.yaml")  # Can be changed to lstm_bi_2layer.yaml
+    
+    # Optional: Load demographic features config
+    # Set to None to disable demographic features
+    feature_config_path = Path("configs/features/demographic_features.yaml")
+    if not feature_config_path.exists():
+        feature_config_path = None
+        print("Note: Demographic features config not found. Training without Age & Sex features.")
     
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
+        experiment_config_path=feature_config_path,  # Optional feature config
     )
     
     print("="*60)
-    print("Training EfficientNet1D-B1 with SQRT Class Weights for 24h Dataset")
+    print("Training LSTM1D Bidirectional with SQRT Class Weights for 24h Dataset")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
@@ -40,9 +48,19 @@ def main():
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
         print(f"Class weights: {weights}")
-    pretrained_config = config.get('model', {}).get('pretrained', {})
-    if pretrained_config.get('enabled', False):
-        print(f"Pretrained weights: {pretrained_config.get('weights_path', 'N/A')}")
+    model_config = config.get('model', {})
+    print(f"LSTM hidden_dim: {model_config.get('hidden_dim', 'N/A')} (per direction)")
+    print(f"LSTM num_layers: {model_config.get('num_layers', 'N/A')}")
+    print(f"LSTM pooling: {model_config.get('pooling', 'N/A')}")
+    print(f"LSTM bidirectional: {model_config.get('bidirectional', 'N/A')}")
+    print(f"Effective feature dim: {model_config.get('hidden_dim', 64) * 2} (64*2 = 128)")
+    demographic_config = config.get('data', {}).get('demographic_features', {})
+    if demographic_config.get('enabled', False):
+        print(f"Demographic features: Enabled (Age & Sex)")
+        print(f"  Age normalization: {demographic_config.get('age_normalization', 'N/A')}")
+        print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
+    else:
+        print(f"Demographic features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -63,7 +81,7 @@ def main():
     )
     
     # Create base model
-    base_model = EfficientNet1D_B1(config)
+    base_model = LSTM1D_Bidirectional(config)
     print(f"Model created with {base_model.count_parameters():,} parameters")
     
     # Wrap in MultiTaskECGModel if multi-task is enabled

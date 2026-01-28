@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=xresnet1d_101_24h_weighted
+#SBATCH --job-name=cnn_scratch_aug
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=06:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -19,7 +19,6 @@ echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
 
 # Ensure we run from the submit directory (robust paths)
-export SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "${SLURM_SUBMIT_DIR}"
 
 # ============================================================================
@@ -60,8 +59,8 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN
 # ============================================================================
 
-# Training starten
-python scripts/training/icu_24h/xresnet1d_101/train_xresnet1d_101_24h.py
+# Training starten (WITH augmentation)
+python scripts/training/icu_24h/CNN_from_scratch/train_cnn_scratch_with_aug.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -86,11 +85,15 @@ if [ -f "$LOG_FILE" ]; then
     
     echo ""
     echo "=== Test Set Results ==="
-    grep -A 10 "TRAINING RESULTS SUMMARY" "$LOG_FILE" || echo "Keine Test-Ergebnisse gefunden"
+    grep -A 10 "Test Set Results" "$LOG_FILE" || echo "Keine Test-Ergebnisse gefunden"
     
     echo ""
     echo "=== Final Training Metrics (letzte 5 Epochs) ==="
     grep "Epoch.*Train Loss\|Epoch.*Val Loss" "$LOG_FILE" | tail -5 || echo "Keine Epoch-Metriken gefunden"
+    
+    echo ""
+    echo "=== Class Distribution ==="
+    grep -A 1 "Class distribution" "$LOG_FILE" | tail -3 || echo "Nicht gefunden"
     
     echo ""
     echo "=== Model Checkpoints ==="

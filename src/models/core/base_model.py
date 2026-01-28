@@ -1,7 +1,7 @@
 """Base model class for all ECG classification models."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 
@@ -24,7 +24,7 @@ class BaseECGModel(nn.Module, ABC):
         self.num_classes = config.get("num_classes", 2)
     
     @abstractmethod
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Forward pass through the model.
         
         Args:
@@ -32,6 +32,8 @@ class BaseECGModel(nn.Module, ABC):
                - CNN: (B, C, T) - Batch, Channels, Time
                - LSTM: (B, T, C) - Batch, Time, Channels
                - Transformer: (B, T, C) or (B, C, T) depending on architecture
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
         
         Returns:
             logits: Output logits tensor of shape (B, num_classes)
@@ -87,7 +89,7 @@ class BaseECGModel(nn.Module, ABC):
             "config": self.config,
         }
     
-    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Extract features from input without final classification head.
         
         This method is used for multi-task learning where we need features
@@ -96,9 +98,12 @@ class BaseECGModel(nn.Module, ABC):
         
         Args:
             x: Input tensor (same format as forward()).
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
         
         Returns:
             features: Feature tensor of shape (B, feature_dim) before final FC layer.
+                     If demographic features are enabled, this includes the demographic features.
         
         Raises:
             NotImplementedError: If the model doesn't support feature extraction.

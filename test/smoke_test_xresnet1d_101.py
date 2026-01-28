@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 
 import torch
 from src.models import XResNet1D101
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import setup_icustays_mapper
 from src.training.losses import get_loss, get_multi_task_loss

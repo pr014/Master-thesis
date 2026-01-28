@@ -14,5 +14,5 @@ model:
   pretrained:
     enabled: true  # Load pretrained weights from PTB-XL
     weights_path: "data/pretrained_weights/PTB-Xl-analysis/fastai_xresnet1d101.pth"  # Path to pretrained weights file (relative to project root or absolute)
-    freeze_backbone: false  # Fine-tuning: train all layers (backbone + head). Set to true for feature extraction (only train head)
+    freeze_backbone: true  # Feature extraction: only train head (backbone frozen). Set to false for fine-tuning (train all layers)
 

@@ -1,6 +1,6 @@
 """Multi-Task ECG Model wrapper for LOS classification + Mortality prediction."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 from .base_model import BaseECGModel
@@ -38,16 +38,33 @@ class MultiTaskECGModel(nn.Module):
         
         # Get feature dimension by running a dummy forward pass
         # This works for models that implement get_features()
+        # Set model to eval mode to avoid BatchNorm issues with single sample
+        was_training = base_model.training
+        base_model.eval()
         dummy_input = torch.zeros(1, 12, 5000)
+        
+        # Check if demographic features are enabled
+        data_config = config.get("data", {})
+        demographic_config = data_config.get("demographic_features", {})
+        use_demographics = demographic_config.get("enabled", False)
+        dummy_demographic_features = None
+        if use_demographics:
+            sex_encoding = demographic_config.get("sex_encoding", "binary")
+            demo_dim = 2 if sex_encoding == "binary" else 3
+            dummy_demographic_features = torch.zeros(1, demo_dim)
+        
         with torch.no_grad():
             try:
-                features = base_model.get_features(dummy_input)
+                features = base_model.get_features(dummy_input, demographic_features=dummy_demographic_features)
                 feature_dim = features.shape[1]
             except NotImplementedError:
                 raise NotImplementedError(
                     f"{base_model.__class__.__name__} does not support multi-task learning. "
                     "The model must implement get_features() method."
                 )
+        # Restore original training mode
+        if was_training:
+            base_model.train()
         
         # Extract LOS head from base model
         # For CNNScratch: fc2 is the LOS head
@@ -81,6 +98,9 @@ class MultiTaskECGModel(nn.Module):
         elif model_name == "ResNet1D14":
             # For ResNet1D14: fc is the final layer (512 -> num_classes)
             return base_model.fc
+        elif model_name == "XResNet1D101":
+            # For XResNet1D101: fc is the final layer (512 -> num_classes)
+            return base_model.fc
         else:
             # Generic approach: try to find the last Linear layer
             # This is a fallback for other models
@@ -93,19 +113,21 @@ class MultiTaskECGModel(nn.Module):
                 "Please implement _extract_los_head() for this model type."
             )
     
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """Forward pass through multi-task model.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
         
         Returns:
             Dictionary with:
                 - 'los': LOS logits of shape (B, num_classes)
                 - 'mortality': Mortality probabilities of shape (B, 1) in range [0, 1]
         """
-        # Extract features using base model
-        features = self.base_model.get_features(x)  # (B, feature_dim)
+        # Extract features using base model (includes demographic features if enabled)
+        features = self.base_model.get_features(x, demographic_features=demographic_features)  # (B, feature_dim)
         
         # LOS classification head
         los_logits = self.los_head(features)  # (B, num_classes)

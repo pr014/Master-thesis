@@ -3,7 +3,7 @@
 from typing import Dict, Any
 import torch
 import torch.nn as nn
-from ..base_model import BaseECGModel
+from ..core.base_model import BaseECGModel
 
 
 class CNNScratch(BaseECGModel):

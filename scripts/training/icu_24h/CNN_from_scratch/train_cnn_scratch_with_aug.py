@@ -1,7 +1,4 @@
-"""Training script for CNN from scratch with LOS bin classification.
-This script uses class weights calculated with Square-Root Weighting (SQINV) method.
-Config: configs/24h_weighted/sqrt_weights.yaml
-"""
+"""Training script for CNN from scratch with LOS bin classification (WITH augmentation)."""
 
 from pathlib import Path
 import sys
@@ -12,7 +9,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import CNNScratch
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from src.training import Trainer
@@ -21,9 +18,10 @@ from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with SQRT class weights."""
-    # Load configs - using 24h weighted config (SQRT method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
+    """Main training function."""
+    # Load configs
+    # Use baseline_with_aug.yaml for training WITH augmentation
+    base_config_path = Path("configs/icu_24h/baseline_with_aug.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -31,16 +29,15 @@ def main():
         model_config_path=model_config_path,
     )
     
+    # Log config paths for tracking
     print("="*60)
-    print("Training CNN with SQRT Class Weights for 24h Dataset")
+    print("Training Configuration")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
-    if 'weight' in config.get('training', {}).get('loss', {}):
-        weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights (SQRT): {weights}")
+    print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -169,6 +166,7 @@ def main():
         print("="*60)
         
         from src.training.train_loop import evaluate_with_detailed_metrics
+        from src.training.losses import get_loss
         import numpy as np
         
         # Load best model checkpoint (use job_id version if available)
@@ -181,7 +179,7 @@ def main():
             if best_model_path.exists():
                 print(f"Loading best model from: {best_model_path}")
                 checkpoint = torch.load(best_model_path, map_location=trainer.device)
-                trainer.model.load_state_dict(checkpoint["model_state_dict"])
+                model.load_state_dict(checkpoint["model_state_dict"])
                 print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
             else:
                 print(f"Warning: Best model checkpoint not found at {best_model_path}. Using current model state.")
@@ -204,8 +202,12 @@ def main():
             num_classes=num_classes,
         )
         
-        # Print test results
-        print("\nTest Set Results:")
+        # Print formatted test results summary
+        print("\n" + "=" * 80)
+        print("📊 TRAINING RESULTS SUMMARY")
+        print("=" * 80)
+
+        # Normalize metric keys (evaluate_with_detailed_metrics returns 'los_*')
         los_loss = test_metrics.get("los_loss", test_metrics.get("loss", 0.0))
         los_acc = test_metrics.get("los_accuracy", test_metrics.get("accuracy", 0.0))
         los_bal_acc = test_metrics.get("los_balanced_accuracy", test_metrics.get("balanced_accuracy", 0.0))
@@ -216,49 +218,62 @@ def main():
         los_per_class_recall = test_metrics.get("los_per_class_recall", test_metrics.get("per_class_recall"))
         los_per_class_f1 = test_metrics.get("los_per_class_f1", test_metrics.get("per_class_f1"))
         los_cm = test_metrics.get("los_confusion_matrix", test_metrics.get("confusion_matrix"))
-
-        print(f"  Test LOS Loss: {los_loss:.4f}")
-        print(f"  Test LOS Accuracy: {los_acc:.4f} ({los_acc*100:.2f}%)")
-        print(f"  LOS Balanced Accuracy: {los_bal_acc:.4f} ({los_bal_acc*100:.2f}%)")
-        print(f"  LOS Macro Precision: {los_macro_precision:.4f}")
-        print(f"  LOS Macro Recall: {los_macro_recall:.4f}")
-        print(f"  LOS Macro F1-Score: {los_macro_f1:.4f}")
-        print(f"  Number of ICU stays evaluated: {test_metrics.get('num_stays', 0)}")
+        
+        # Model Performance
+        best_val_loss = min(history.get('val_loss', [float('inf')]))
+        print("\n🔹 Model Performance:")
+        print(f"   Best Validation Loss: {best_val_loss:.4f}")
+        print(f"   Test LOS Loss:        {los_loss:.4f}")
+        print(f"   Test LOS Accuracy:    {los_acc:.4f} ({los_acc*100:.2f}%)")
+        print(f"   LOS Balanced Acc:     {los_bal_acc:.4f} ({los_bal_acc*100:.2f}%)")
+        print(f"   LOS Macro Precision:  {los_macro_precision:.4f}")
+        print(f"   LOS Macro Recall:     {los_macro_recall:.4f}")
+        print(f"   LOS Macro F1-Score:   {los_macro_f1:.4f}")
+        print(f"   Test ICU Stays:       {test_metrics.get('num_stays', 0):,}")
         
         # Per-class metrics
-        print("\n  Per-Class Metrics:")
-        print(f"    {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
-        print("    " + "-" * 44)
+        print("\n🔹 Per-Class Metrics:")
+        print(f"   {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
+        print("   " + "-" * 44)
         for cls in range(num_classes):
-            print(f"    {cls:<8} {los_per_class_precision[cls]:<12.4f} "
+            print(f"   {cls:<8} {los_per_class_precision[cls]:<12.4f} "
                   f"{los_per_class_recall[cls]:<12.4f} "
                   f"{los_per_class_f1[cls]:<12.4f}")
 
         # Mortality summary (multi-task)
         if "mortality_auc" in test_metrics:
-            print("\n  Mortality (overall):")
-            print(f"    Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
-            print(f"    Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
-            print(f"    Recall:    {test_metrics.get('mortality_recall', 0.0):.4f}")
-            print(f"    F1:        {test_metrics.get('mortality_f1', 0.0):.4f}")
-            print(f"    AUC:       {test_metrics.get('mortality_auc', 0.0):.4f}")
+            print("\n🔹 Mortality (overall):")
+            print(f"   Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
+            print(f"   Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
+            print(f"   Recall:    {test_metrics.get('mortality_recall', 0.0):.4f}")
+            print(f"   F1:        {test_metrics.get('mortality_f1', 0.0):.4f}")
+            print(f"   AUC:       {test_metrics.get('mortality_auc', 0.0):.4f}")
 
             if "mortality_per_los_class" in test_metrics:
-                print("\n  Mortality per LOS class:")
-                print(f"    {'LOS':<6} {'AUC':<8} {'F1':<8} {'Support':<10}")
-                print("    " + "-" * 34)
+                print("\n🔹 Mortality per LOS class:")
+                print(f"   {'LOS':<6} {'AUC':<8} {'F1':<8} {'Support':<10}")
+                print("   " + "-" * 34)
                 for los_cls in range(num_classes):
                     m = test_metrics["mortality_per_los_class"].get(los_cls, {})
-                    print(f"    {los_cls:<6} {m.get('auc', 0.0):<8.4f} {m.get('f1', 0.0):<8.4f} {m.get('support', 0):<10d}")
+                    print(f"   {los_cls:<6} {m.get('auc', 0.0):<8.4f} {m.get('f1', 0.0):<8.4f} {m.get('support', 0):<10d}")
         
         # Confusion Matrix
         if los_cm is not None:
             cm = np.array(los_cm)
-            print("\n  Confusion Matrix:")
-            print("    " + " ".join([f"{i:>6}" for i in range(num_classes)]))
+            print("\n🔹 Confusion Matrix:")
+            print("   " + " ".join([f"{i:>6}" for i in range(num_classes)]))
             for i in range(num_classes):
-                row_str = f"  {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
+                row_str = f"   {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
                 print(row_str)
+        
+        # Checkpoint info
+        print("\n" + "=" * 80)
+        if trainer.job_id:
+            checkpoint_path = f"outputs/checkpoints/{model_name}_best_{trainer.job_id}.pt"
+            print(f"✅ Checkpoints: {checkpoint_path}")
+        else:
+            print("✅ Checkpoints: outputs/checkpoints/<MODEL_NAME>_best_<JOB_ID>.pt")
+        print("=" * 80)
         
         # Add test metrics to history
         history["test_los_loss"] = los_loss

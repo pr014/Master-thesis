@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from src.models import XResNet1D101
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
@@ -25,9 +25,17 @@ def main():
     base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
     model_config_path = Path("configs/model/xresnet1d_101/xresnet1d_101_pretrained.yaml")
     
+    # Optional: Load demographic features config
+    # Set to None to disable demographic features
+    feature_config_path = Path("configs/features/demographic_features.yaml")
+    if not feature_config_path.exists():
+        feature_config_path = None
+        print("Note: Demographic features config not found. Training without Age & Sex features.")
+    
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
+        experiment_config_path=feature_config_path,  # Optional feature config
     )
     
     print("="*60)
@@ -43,6 +51,13 @@ def main():
     pretrained_config = config.get('model', {}).get('pretrained', {})
     if pretrained_config.get('enabled', False):
         print(f"Pretrained weights: {pretrained_config.get('weights_path', 'N/A')}")
+    demographic_config = config.get('data', {}).get('demographic_features', {})
+    if demographic_config.get('enabled', False):
+        print(f"Demographic features: Enabled (Age & Sex)")
+        print(f"  Age normalization: {demographic_config.get('age_normalization', 'N/A')}")
+        print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
+    else:
+        print(f"Demographic features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

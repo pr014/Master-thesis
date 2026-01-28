@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=xresnet1d_101_24h_weighted
+#SBATCH --job-name=lstm_bi_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=06:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
@@ -61,7 +61,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 
 # Training starten
-python scripts/training/icu_24h/xresnet1d_101/train_xresnet1d_101_24h.py
+python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py
 
 TRAINING_EXIT_CODE=$?
 

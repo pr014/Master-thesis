@@ -76,9 +76,17 @@ def train_epoch(
         if is_multi_task and "mortality_label" in batch:
             mortality_labels = batch["mortality_label"].to(device)[valid_mask]
         
+        # Get demographic features if available
+        demographic_features = None
+        if "demographic_features" in batch and batch["demographic_features"] is not None:
+            demographic_features = batch["demographic_features"].to(device)
+            if valid_mask.any():
+                # Filter demographic features to match valid_mask
+                demographic_features = demographic_features[valid_mask]
+        
         # Forward pass
         optimizer.zero_grad()
-        outputs = model(signals)
+        outputs = model(signals, demographic_features=demographic_features)
         
         # Handle multi-task vs single-task
         if is_multi_task and isinstance(outputs, dict):
@@ -211,8 +219,14 @@ def validate_epoch(
             if mortality_labels_batch is not None:
                 mortality_labels_batch = mortality_labels_batch[valid_mask]
             
+            # Get demographic features if available
+            demographic_features = None
+            if "demographic_features" in batch and batch["demographic_features"] is not None:
+                demographic_features = batch["demographic_features"].to(device)
+                demographic_features = demographic_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals)
+            outputs = model(signals, demographic_features=demographic_features)
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
@@ -426,8 +440,14 @@ def evaluate_with_detailed_metrics(
             if mortality_labels_batch is not None:
                 mortality_labels_batch = mortality_labels_batch[valid_mask]
             
+            # Get demographic features if available
+            demographic_features = None
+            if "demographic_features" in batch and batch["demographic_features"] is not None:
+                demographic_features = batch["demographic_features"].to(device)
+                demographic_features = demographic_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals)
+            outputs = model(signals, demographic_features=demographic_features)
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):

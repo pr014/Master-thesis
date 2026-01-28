@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cnn_scratch_aug
+#SBATCH --job-name=cnn_scratch_los
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
@@ -59,8 +59,8 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN
 # ============================================================================
 
-# Training starten (WITH augmentation)
-python scripts/training/icu_24h/train_cnn_scratch_with_aug.py
+# Training starten
+python scripts/training/icu_24h/CNN_from_scratch/train_cnn_scratch.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -114,4 +114,6 @@ echo "Checkpoints verfügbar in: outputs/checkpoints/"
 
 # Exit mit Training-Exit-Code
 exit $TRAINING_EXIT_CODE
+
+
 

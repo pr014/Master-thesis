@@ -1,0 +1,20 @@
+# LSTM1D Unidirectional model-specific configuration (1-Layer)
+# Merges with baseline.yaml
+# Only LSTM1D-specific overrides go here
+
+model:
+  type: "LSTM1D"  # Alias for LSTM1D_Unidirectional
+  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+  
+  # LSTM-specific architecture parameters
+  # Architecture: Unidirectional LSTM for ECG time series classification
+  # Based on Kim et al. 2020: 128 units recommended for raw ECG signals
+  # ~140K parameters (1 layer)
+  
+  hidden_dim: 128  # Hidden dimension for LSTM (Layer 1)
+  num_layers: 1  # Number of LSTM layers
+  dropout: 0.3  # Dropout between LSTM layers (only if num_layers > 1)
+  bidirectional: false  # Unidirectional LSTM
+  pooling: "last"  # Pooling strategy: "last", "mean", or "max"
+  use_embedding: false  # Whether to use embedding layer (12 → hidden_dim)
+

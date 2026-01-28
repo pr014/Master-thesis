@@ -17,7 +17,7 @@ sys.path.insert(0, str(project_root))
 
 import torch
 from src.models import CNNScratch
-from src.models.multi_task_model import MultiTaskECGModel
+from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from src.training.losses import get_loss, get_multi_task_loss

@@ -3,8 +3,8 @@
 Parse training metrics from SLURM output logs.
 
 Usage:
-  python scripts/parse_training_results.py --job 3010998
-  python scripts/parse_training_results.py --log outputs/logs/slurm_3010998.out
+  python scripts/analysis/parse_training_results.py --job 3010998
+  python scripts/analysis/parse_training_results.py --log outputs/logs/slurm_3010998.out
 """
 
 from __future__ import annotations
@@ -235,7 +235,8 @@ def main() -> None:
             m = parsed.per_class[cls]
             print(f"  {cls}: p={m['precision']:.4f} r={m['recall']:.4f} f1={m['f1']:.4f}")
 
-    if args.cm and parsed.confusion_matrix is not None:
+    # Always print confusion matrix (unless explicitly disabled)
+    if parsed.confusion_matrix is not None:
         print("\n🔹 Confusion Matrix:")
         num_classes = len(parsed.confusion_matrix)
         # Print header
@@ -244,6 +245,8 @@ def main() -> None:
         for i, row in enumerate(parsed.confusion_matrix):
             row_str = f"   {i} " + " ".join([f"{val:>6}" for val in row])
             print(row_str)
+    else:
+        print("\n🔹 Confusion Matrix: <not found in log>")
 
 
 if __name__ == "__main__":
