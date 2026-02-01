@@ -19,13 +19,15 @@ sys.path.insert(0, str(project_root / "src"))
 
 from src.data.ecg.ecg_loader import build_npy_index
 from src.data.ecg.ecg_dataset import extract_subject_id_from_path
-from src.data.labeling import load_icustays, ICUStayMapper, los_to_bin
+from src.data.labeling import load_icustays, ICUStayMapper, los_to_bin, get_num_classes_from_config
+from src.utils.config_loader import load_config
 import pandas as pd
 
 def analyze_class_distribution(
     data_dir: str,
     icustays_path: str = None,
-    dataset_name: str = "dataset"
+    dataset_name: str = "dataset",
+    config: dict = None
 ):
     """Analyze class distribution in ECG dataset."""
     print("="*80)
@@ -86,7 +88,15 @@ def analyze_class_distribution(
                 unmatched_count += 1
                 continue
             
-            class_label = los_to_bin(los_days)
+            # Use los_binning config if available
+            if config:
+                data_config = config.get("data", {})
+                los_binning_config = data_config.get("los_binning", {})
+                strategy = los_binning_config.get("strategy", "intervals")
+                max_days = los_binning_config.get("max_days", 9)
+                class_label = los_to_bin(los_days, binning_strategy=strategy, max_days=max_days)
+            else:
+                class_label = los_to_bin(los_days)
             class_counts[class_label] += 1
             matched_count += 1
         except (ValueError, KeyError):
@@ -248,24 +258,58 @@ def main():
         default="configs/all_icu_ecgs/weighted",
         help="Directory containing config files"
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config file to read los_binning settings (optional)"
+    )
     
     args = parser.parse_args()
+    
+    # Load config if provided to get los_binning settings
+    config = None
+    if args.config:
+        config_path = Path(args.config)
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                import yaml
+                config = yaml.safe_load(f)
+            print(f"Loaded config from: {args.config}")
+            los_binning = config.get('data', {}).get('los_binning', {})
+            print(f"LOS binning strategy: {los_binning.get('strategy', 'intervals')}")
+            print(f"LOS binning max_days: {los_binning.get('max_days', 9)}")
+        else:
+            print(f"Warning: Config file not found: {args.config}")
     
     # Analyze class distribution
     print("Analyzing class distribution...")
     class_counts = analyze_class_distribution(
         data_dir=args.data_dir,
         icustays_path=args.icustays_path,
-        dataset_name="all_icu_ecgs"
+        dataset_name="all_icu_ecgs",
+        config=config
     )
     
     if not class_counts or sum(class_counts.values()) == 0:
         print("ERROR: No samples found. Cannot calculate weights.")
         return
     
+    # Determine number of classes from config or class_counts
+    if config:
+        try:
+            n_classes = get_num_classes_from_config(config)
+            print(f"Using {n_classes} classes from config")
+        except (KeyError, ValueError):
+            n_classes = max(class_counts.keys()) + 1
+            print(f"Could not determine classes from config, using {n_classes} from data")
+    else:
+        n_classes = max(class_counts.keys()) + 1
+        print(f"Using {n_classes} classes from data")
+    
     # Calculate weights
     print("\nCalculating weights...")
-    balanced_weights, sqrt_weights, counts = calculate_weights(class_counts)
+    balanced_weights, sqrt_weights, counts = calculate_weights(class_counts, n_classes=n_classes)
     
     # Update config files
     config_dir = Path(args.config_dir)

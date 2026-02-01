@@ -17,6 +17,11 @@ data:
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
   
+  # LOS binning strategy
+  los_binning:
+    strategy: "exact_days"  # "intervals" (old 10-class) or "exact_days" (new, e.g., 8-class)
+    max_days: 7  # Only used for "exact_days" strategy (default: 9) - 7 = 8 classes
+  
   # Preprocessing (same for all models)
   # Pipeline order: Resampling → Bandpass Filtering → Segmentation → Normalization
   preprocessing:
@@ -38,11 +43,6 @@ data:
     amplitude_scaling: false
     scale_min: 0.85  # Minimum scaling factor
     scale_max: 1.15  # Maximum scaling factor
-    baseline_wander: false
-    freq_min: 0.15   # Minimum frequency in Hz
-    freq_max: 0.4    # Maximum frequency in Hz
-    amp_min: 0.03    # Minimum amplitude in mV
-    amp_max: 0.08    # Maximum amplitude in mV
     # Future options (not implemented yet):
     # time_warping: false
     # lead_dropout: false
@@ -77,6 +77,7 @@ training:
   # Loss function (same for all models)
   loss:
     type: "cross_entropy"  # "cross_entropy", "focal", "weighted_ce"
+    enabled: false  # Disable class weights (use standard cross_entropy)
     # Add loss-specific parameters here if needed
 
 # Validation settings (same for all models)

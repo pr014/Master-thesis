@@ -1,4 +1,4 @@
-"""Training script for EfficientNet1D-B1 with LOS bin classification.
+"""Training script for Hybrid CNN-LSTM with LOS bin classification.
 This script uses class weights specifically calculated for the 24h ECG dataset.
 Config: configs/icu_24h/24h_weighted/sqrt_weights.yaml (sqrt method)
 """
@@ -9,9 +9,9 @@ import os
 import torch
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from src.models import EfficientNet1D_B1
+from src.models import HybridCNNLSTM
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
@@ -23,9 +23,10 @@ def main():
     """Main training function for 24h dataset with class weights."""
     # Load configs - using 24h weighted config (sqrt method)
     base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-    model_config_path = Path("configs/model/efficientnet1d/efficientnet1d_b1_scratch.yaml")
+    model_config_path = Path("configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml")
     
     # Optional: Load demographic features config
+    # Set to None to disable demographic features
     feature_config_path = Path("configs/features/demographic_features.yaml")
     if not feature_config_path.exists():
         feature_config_path = None
@@ -34,30 +35,30 @@ def main():
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
-        experiment_config_path=feature_config_path,
+        experiment_config_path=feature_config_path,  # Optional feature config
     )
     
     print("="*60)
-    print("Training EfficientNet1D-B1 with SQRT Class Weights for 24h Dataset")
+    print("Training Hybrid CNN-LSTM with SQRT Class Weights for 24h Dataset")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
-    if feature_config_path:
-        print(f"Feature config: {feature_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights (SQRT): {weights}")
-    pretrained_config = config.get('model', {}).get('pretrained', {})
-    if pretrained_config.get('enabled', False):
-        print(f"Pretrained weights: {pretrained_config.get('weights_path', 'N/A')}")
-    else:
-        print("Pretrained weights: Disabled (training from scratch)")
-    
+        print(f"Class weights: {weights}")
+    model_config = config.get('model', {})
+    print(f"CNN: 12→{model_config.get('conv1_out', 32)}→{model_config.get('conv2_out', 64)}→{model_config.get('conv3_out', 128)}")
+    print(f"LSTM hidden_dim: {model_config.get('hidden_dim', 128)} (per direction)")
+    print(f"LSTM num_layers: {model_config.get('num_layers', 2)}")
+    print(f"LSTM bidirectional: {model_config.get('bidirectional', True)}")
+    print(f"LSTM pooling: {model_config.get('pooling', 'last')}")
     demographic_config = config.get('data', {}).get('demographic_features', {})
     if demographic_config.get('enabled', False):
         print(f"Demographic features: Enabled (Age & Sex)")
+        print(f"  Age normalization: {demographic_config.get('age_normalization', 'N/A')}")
+        print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
     else:
         print(f"Demographic features: Disabled")
     print("="*60)
@@ -80,7 +81,7 @@ def main():
     )
     
     # Create base model
-    base_model = EfficientNet1D_B1(config)
+    base_model = HybridCNNLSTM(config)
     print(f"Model created with {base_model.count_parameters():,} parameters")
     
     # Wrap in MultiTaskECGModel if multi-task is enabled

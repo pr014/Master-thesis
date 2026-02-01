@@ -26,9 +26,16 @@ def main():
     base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
+    # Optional: Load demographic features config
+    feature_config_path = Path("configs/features/demographic_features.yaml")
+    if not feature_config_path.exists():
+        feature_config_path = None
+        print("Note: Demographic features config not found. Training without Age & Sex features.")
+    
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
+        experiment_config_path=feature_config_path,
     )
     
     print("="*60)
@@ -36,11 +43,19 @@ def main():
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
+    if feature_config_path:
+        print(f"Feature config: {feature_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
         print(f"Class weights (SQRT): {weights}")
+    
+    demographic_config = config.get('data', {}).get('demographic_features', {})
+    if demographic_config.get('enabled', False):
+        print(f"Demographic features: Enabled (Age & Sex)")
+    else:
+        print(f"Demographic features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

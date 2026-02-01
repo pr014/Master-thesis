@@ -41,7 +41,10 @@ class MultiTaskECGModel(nn.Module):
         # Set model to eval mode to avoid BatchNorm issues with single sample
         was_training = base_model.training
         base_model.eval()
-        dummy_input = torch.zeros(1, 12, 5000)
+        
+        # Get device from model parameters (to ensure dummy_input is on same device)
+        device = next(base_model.parameters()).device
+        dummy_input = torch.zeros(1, 12, 5000, device=device)
         
         # Check if demographic features are enabled
         data_config = config.get("data", {})
@@ -51,7 +54,7 @@ class MultiTaskECGModel(nn.Module):
         if use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3
-            dummy_demographic_features = torch.zeros(1, demo_dim)
+            dummy_demographic_features = torch.zeros(1, demo_dim, device=device)
         
         with torch.no_grad():
             try:

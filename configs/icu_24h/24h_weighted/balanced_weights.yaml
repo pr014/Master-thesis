@@ -19,6 +19,11 @@ data:
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
   
+  # LOS binning strategy
+  los_binning:
+    strategy: "intervals"  # "intervals" (old 10-class) or "exact_days" (new, e.g., 8-class)
+    max_days: 9  # Only used for "exact_days" strategy (default: 9)
+  
   # Preprocessing (same as baseline)
   preprocessing:
     target_sampling_rate: 500.0
@@ -72,17 +77,20 @@ training:
   # Normalized so mean = 1.0
   loss:
     type: "weighted_ce"
-    weight: [2.1, 0.6, 1.1, 1.9, 3.0, 5.0, 6.6, 10.5, 11.8, 2.6]
-    # Class 0: 2.1  (15.5% of samples)
-    # Class 1: 0.6  (33.0% of samples) - most frequent, lowest weight
-    # Class 2: 1.1  (17.7% of samples)
-    # Class 3: 1.9  (10.1% of samples)
-    # Class 4: 3.0  (6.3% of samples)
-    # Class 5: 5.0  (3.8% of samples)
-    # Class 6: 6.6  (2.9% of samples)
-    # Class 7: 10.5 (1.8% of samples) - minority class
-    # Class 8: 11.8 (1.6% of samples) - rarest class, highest weight
-    # Class 9: 2.6  (7.3% of samples)
+    enabled: true  # Set to false to disable weighted classes (useful for balanced datasets)
+    weight: [0.2, 0.3, 0.5, 0.8, 1.3, 1.9, 2.5, 0.6]  # 8 classes for exact_days (max_days=7)
+  # Weights calculated based on training set distribution (34,838 samples):
+  # Class distribution: [12411, 8322, 4543, 2654, 1672, 1089, 829, 3318]
+  # Method: balanced weights (n_samples / (n_classes * count[i]))
+  # Normalized so mean = 1.0
+  # Class 0: 0.17 (12,411 samples, 35.62%)
+  # Class 1: 0.25 (8,322 samples, 23.89%)
+  # Class 2: 0.46 (4,543 samples, 13.04%)
+  # Class 3: 0.79 (2,654 samples, 7.62%)
+  # Class 4: 1.25 (1,672 samples, 4.80%)
+  # Class 5: 1.92 (1,089 samples, 3.13%)
+  # Class 6: 2.53 (829 samples, 2.38%)
+  # Class 7: 0.63 (3,318 samples, 9.52%)
 
 # Validation settings
 validation:

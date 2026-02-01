@@ -1,0 +1,22 @@
+# Hybrid CNN-LSTM model-specific configuration
+# Merges with baseline.yaml
+
+model:
+  type: "HybridCNNLSTM"
+  num_classes: 10
+
+  # CNN block parameters (default architecture)
+  conv1_out: 32
+  conv2_out: 64
+  conv3_out: 128
+  conv1_kernel: 5
+  conv2_kernel: 5
+  conv3_kernel: 3
+  # Padding defaults to kernel//2 for same-length conv
+
+  # LSTM parameters
+  hidden_dim: 128  # per direction
+  hidden_dim_layer2: 128
+  num_layers: 2
+  bidirectional: true
+  pooling: "last"

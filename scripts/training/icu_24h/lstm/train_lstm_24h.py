@@ -1,6 +1,9 @@
-"""Training script for LSTM1D with LOS bin classification.
+"""Training script for LSTM1D Unidirectional with LOS bin classification.
 This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/24h_weighted/sqrt_weights.yaml (sqrt method)
+Supports flexible output classes via los_binning strategy in base config.
+
+Default config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
+Can be changed by modifying base_config_path below.
 """
 
 from pathlib import Path
@@ -14,15 +17,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from src.models import LSTM1D
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
+from src.data.labeling import get_num_classes_from_config
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights."""
-    # Load configs - using 24h weighted config (sqrt method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
+    """Main training function for 24h dataset with class weights.
+    
+    Supports flexible output classes via los_binning strategy in base config.
+    The number of output classes is automatically determined from los_binning settings.
+    """
+    # Load configs - can be changed to use different base configs
+    # Default: exact_days (8 classes) with balanced weights
+    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
+    # Alternative configs:
+    # - Path("configs/icu_24h/output/weighted_intervals.yaml")  # 10 classes (intervals)
+    # - Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")  # 10 classes (sqrt weights)
+    
     model_config_path = Path("configs/model/lstm/unidirectional/lstm_1layer.yaml")  # Can be changed to lstm_2layer.yaml
     
     # Optional: Load demographic features config
@@ -38,13 +51,22 @@ def main():
         experiment_config_path=feature_config_path,  # Optional feature config
     )
     
+    # Override num_classes from los_binning to ensure model uses correct number of classes
+    # This makes the script flexible for different los_binning strategies
+    num_classes = get_num_classes_from_config(config)
+    config["model"]["num_classes"] = num_classes
+    
     print("="*60)
-    print("Training LSTM1D with SQRT Class Weights for 24h Dataset")
+    print("Training LSTM1D Unidirectional with Class Weights for 24h Dataset")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
+    print(f"Number of classes: {num_classes}")
+    los_binning = config.get('data', {}).get('los_binning', {})
+    print(f"LOS binning: strategy={los_binning.get('strategy', 'unknown')}, max_days={los_binning.get('max_days', 'N/A')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
+    print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
         print(f"Class weights: {weights}")

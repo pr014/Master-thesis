@@ -8,7 +8,7 @@ import torch.nn as nn
 import numpy as np
 
 from ..data.ecg import create_dataloaders
-from ..data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
+from ..data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping, get_num_classes_from_config
 from .train_loop import evaluate_with_detailed_metrics
 
 
@@ -131,8 +131,12 @@ def evaluate_and_print_results(
             "Ensure SLURM_JOB_ID environment variable is set."
         )
     
-    # Get number of classes from config
-    num_classes = config.get("model", {}).get("num_classes", 10)
+    # Get number of classes from config (use los_binning if available, else model.num_classes, else default 10)
+    try:
+        num_classes = get_num_classes_from_config(config)
+    except (KeyError, ValueError):
+        # Fallback to model config or default
+        num_classes = config.get("model", {}).get("num_classes", 10)
     
     # Evaluate on test set with detailed metrics
     test_metrics = evaluate_with_detailed_metrics(

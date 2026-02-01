@@ -1,0 +1,33 @@
+# ECG-CPC model-specific configuration
+# Based on Al-Masud et al. (2025): "Benchmarking ECG Foundational Models"
+# Architecture matches checkpoint for full Transfer Learning
+
+model:
+  type: "ECG_S4_CPC"
+  num_classes: 10
+  
+  # Input resampling (for checkpoint compatibility)
+  # Frequency-based resampling: 500Hz → 240Hz, then crop to 2.5s
+  use_input_resampling: true  # Enable frequency-based resampling (FFT-based, not linear interpolation)
+  target_seq_len: 600         # Checkpoint expects 2.5s @ 240Hz = 600 timesteps
+  input_seconds: 2.5          # Input duration in seconds for checkpoint (2.5s @ 240Hz = 600 samples)
+  
+  # RNN Encoder configuration (from checkpoint)
+  rnn_features: [512, 512, 512, 512]  # Feature dimensions for each RNN layer
+  rnn_kernel_sizes: [3, 1, 1, 1]      # Kernel sizes for each layer
+  rnn_strides: [2, 1, 1, 1]           # Stride sizes (first layer downsamples by 2)
+  rnn_dropout: 0.1                     # Dropout rate for RNN layers
+  
+  # S4 Encoder configuration (from checkpoint: model_dim=512, state_dim=8)
+  d_model: 512          # Hidden dimension for S4 layers (changed from 256 to match checkpoint)
+  d_state: 8            # State dimension for S4 (changed from 64 to match checkpoint)
+  n_layers: 4           # Number of S4 layers
+  dropout: 0.1           # Dropout rate for S4 layers
+  prenorm: true         # Use pre-normalization (recommended)
+  
+  # Pretrained weights configuration
+  pretrained:
+    enabled: true        # Enable pretrained weights loading
+    weights_path: "data/pretrained_weights/ECG-CPC/last_11597276.ckpt"  # Path to checkpoint
+    freeze_backbone: false  # Controlled by training phase (Phase 1: true, Phase 2: false)
+

@@ -19,6 +19,11 @@ data:
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
   
+  # LOS binning strategy
+  los_binning:
+    strategy: "intervals"  # "intervals" (old 10-class) or "exact_days" (new, e.g., 8-class)
+    max_days: 9  # Only used for "exact_days" strategy (default: 9)
+  
   # Preprocessing (same as baseline)
   preprocessing:
     target_sampling_rate: 500.0
@@ -68,21 +73,19 @@ training:
   # Loss function with class weights for all_icu_ecgs dataset
   loss:
     type: "weighted_ce"
-    weight: [0.5, 0.2, 0.4, 0.6, 0.8, 1.2, 1.5, 2.1, 2.3, 0.3]
-  # Weights calculated based on training set distribution (61,663 samples):
-  # Class distribution: [7073, 15085, 9585, 6231, 4367, 2973, 2436, 1766, 1556, 10591]
+    weight: [0.2, 0.3, 0.5, 0.8, 1.3, 1.9, 2.5, 0.6]  # TO_BE_UPDATED
+  # Weights calculated based on training set distribution (34,838 samples):
+  # Class distribution: [12411, 8322, 4543, 2654, 1672, 1089, 829, 3318]
   # Method: balanced weights (n_samples / (n_classes * count[i]))
   # Normalized so mean = 1.0
-  # Class 0: 0.51 (7,073 samples, 11.47%)
-  # Class 1: 0.24 (15,085 samples, 24.46%)
-  # Class 2: 0.38 (9,585 samples, 15.54%)
-  # Class 3: 0.58 (6,231 samples, 10.10%)
-  # Class 4: 0.83 (4,367 samples, 7.08%)
-  # Class 5: 1.22 (2,973 samples, 4.82%)
-  # Class 6: 1.49 (2,436 samples, 3.95%)
-  # Class 7: 2.06 (1,766 samples, 2.86%)
-  # Class 8: 2.34 (1,556 samples, 2.52%)
-  # Class 9: 0.34 (10,591 samples, 17.18%)
+  # Class 0: 0.17 (12,411 samples, 35.62%)
+  # Class 1: 0.25 (8,322 samples, 23.89%)
+  # Class 2: 0.46 (4,543 samples, 13.04%)
+  # Class 3: 0.79 (2,654 samples, 7.62%)
+  # Class 4: 1.25 (1,672 samples, 4.80%)
+  # Class 5: 1.92 (1,089 samples, 3.13%)
+  # Class 6: 2.53 (829 samples, 2.38%)
+  # Class 7: 0.63 (3,318 samples, 9.52%)
 
 # Validation settings
 validation:

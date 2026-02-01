@@ -1,6 +1,6 @@
 """CNN model for ECG classification - simple architecture from scratch."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 from ..core.base_model import BaseECGModel
@@ -123,11 +123,13 @@ class CNNScratch(BaseECGModel):
         
         return x
     
-    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Extract features before final classification head.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 This parameter is ignored for CNNScratch (not used in this model).
         
         Returns:
             features: Feature tensor of shape (B, 64) after fc1 and before fc2.

@@ -120,51 +120,98 @@ def _parse_key_metrics(block: str) -> Tuple[Dict[str, float], Optional[int]]:
 
 def _parse_per_class(block: str) -> Dict[int, Dict[str, float]]:
     # Lines like: "    1        0.3218       0.8164       0.4616"
+    # Support both single-digit and multi-digit class indices
+    # IMPORTANT: Only match lines where the third value (F1) is between 0 and 1
+    # This avoids matching lines with Support values (large integers)
     per_class: Dict[int, Dict[str, float]] = {}
     for m in re.finditer(
-        r"(?m)^\s*(\d)\s+(%s)\s+(%s)\s+(%s)\s*$" % (_RE_FLOAT, _RE_FLOAT, _RE_FLOAT),
+        r"(?m)^\s*(\d+)\s+(%s)\s+(%s)\s+(%s)\s*$" % (_RE_FLOAT, _RE_FLOAT, _RE_FLOAT),
         block,
     ):
         cls = int(m.group(1))
-        per_class[cls] = {
-            "precision": float(m.group(2)),
-            "recall": float(m.group(3)),
-            "f1": float(m.group(4)),
-        }
+        precision = float(m.group(2))
+        recall = float(m.group(3))
+        f1 = float(m.group(4))
+        
+        # Only accept if F1 is between 0 and 1 (valid F1-score range)
+        # This filters out Support values which are large integers
+        if 0.0 <= f1 <= 1.0:
+            per_class[cls] = {
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+            }
     return per_class
 
 
 def _parse_confusion_matrix(block: str) -> Optional[List[List[int]]]:
-    # Expect header then 10 rows starting with class index.
+    # Dynamically detect number of classes from header row
     if "Confusion Matrix:" not in block:
         return None
 
-    # Find the header row with 10 class labels
-    header_match = re.search(r"(?m)^\s*0\s+1\s+2\s+3\s+4\s+5\s+6\s+7\s+8\s+9\s*$", block)
-    if not header_match:
+    # Find the section after "Confusion Matrix:"
+    cm_section = block[block.find("Confusion Matrix:"):]
+    lines = cm_section.splitlines()
+    
+    # Find header row - look for line with numbers starting from 0
+    num_classes = None
+    header_line_idx = None
+    
+    for i, line in enumerate(lines):
+        if "Confusion Matrix" in line:
+            continue
+        # Extract all numbers from line
+        numbers = re.findall(r'\d+', line)
+        if numbers:
+            try:
+                parsed_nums = [int(n) for n in numbers]
+                if len(parsed_nums) > 0 and parsed_nums[0] == 0:
+                    # Check if consecutive starting from 0
+                    if parsed_nums == list(range(len(parsed_nums))):
+                        num_classes = len(parsed_nums)
+                        header_line_idx = i
+                        break
+            except (ValueError, IndexError):
+                continue
+    
+    if num_classes is None or header_line_idx is None:
         return None
-
-    # Read subsequent 10 lines
-    start_idx = header_match.end()
-    after = block[start_idx:].splitlines()
+    
+    # Parse rows after header
     rows: List[List[int]] = []
-    for line in after:
-        line = line.rstrip()
+    for i in range(header_line_idx + 1, len(lines)):
+        line = lines[i].strip()
         if not line:
             continue
-        m = re.match(r"^\s*(\d)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", line)
-        if not m:
-            # Stop when the table ends
+        
+        # Extract all numbers from line
+        numbers = re.findall(r'\d+', line)
+        if not numbers:
+            # Stop if we hit a non-number line and already have rows
             if rows:
                 break
             continue
-        # cls = int(m.group(1))
-        vals = [int(m.group(i)) for i in range(2, 12)]
-        rows.append(vals)
-        if len(rows) == 10:
-            break
+        
+        try:
+            parsed_nums = [int(n) for n in numbers]
+            # First number is class index, rest are confusion matrix values
+            if len(parsed_nums) == num_classes + 1:
+                # Verify class index matches row number
+                cls_idx = parsed_nums[0]
+                if cls_idx == len(rows):
+                    vals = parsed_nums[1:]
+                    rows.append(vals)
+                    # Stop when we have all rows
+                    if len(rows) == num_classes:
+                        break
+        except (ValueError, IndexError):
+            # Stop if parsing fails and we already have rows
+            if rows:
+                break
+            continue
 
-    return rows if len(rows) == 10 else None
+    # Return if we got the expected number of rows
+    return rows if len(rows) == num_classes else None
 
 
 def parse_log_text(text: str) -> ParsedResults:

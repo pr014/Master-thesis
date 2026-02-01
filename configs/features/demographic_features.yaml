@@ -4,7 +4,7 @@
 
 data:
   demographic_features:
-    enabled: false  # Set to false to disable (or don't load this config)
+    enabled: true  # Set to false to disable (or don't load this config)
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
     
     # Age normalization

@@ -18,11 +18,16 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
     loss_config = config.get("training", {}).get("loss", {})
     loss_type = loss_config.get("type", "cross_entropy")
     
+    # Check if weighted classes are enabled
+    use_weighted = loss_config.get("enabled", True)  # Default: enabled for backward compatibility
+    
     if loss_type == "cross_entropy":
         # Standard cross-entropy loss
-        weight = loss_config.get("weight", None)
-        if weight is not None:
-            weight = torch.tensor(weight, dtype=torch.float32)
+        weight = None
+        if use_weighted:
+            weight = loss_config.get("weight", None)
+            if weight is not None:
+                weight = torch.tensor(weight, dtype=torch.float32)
         return nn.CrossEntropyLoss(weight=weight)
     
     elif loss_type == "focal":
@@ -33,10 +38,12 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
         return nn.CrossEntropyLoss()
     
     elif loss_type == "weighted_ce":
-        # Weighted cross-entropy
-        weight = loss_config.get("weight", None)
-        if weight is not None:
-            weight = torch.tensor(weight, dtype=torch.float32)
+        # Weighted cross-entropy (only if enabled)
+        weight = None
+        if use_weighted:
+            weight = loss_config.get("weight", None)
+            if weight is not None:
+                weight = torch.tensor(weight, dtype=torch.float32)
         return nn.CrossEntropyLoss(weight=weight)
     
     else:
@@ -178,9 +185,13 @@ def get_multi_task_loss(config: Dict[str, Any]) -> MultiTaskLoss:
     # Get LOS loss (can be weighted)
     los_loss_config = training_config.get("loss", {})
     los_loss_type = los_loss_config.get("type", "cross_entropy")
-    los_weight = los_loss_config.get("weight", None)
-    if los_weight is not None:
-        los_weight = torch.tensor(los_weight, dtype=torch.float32)
+    use_weighted = los_loss_config.get("enabled", True)  # Default: enabled for backward compatibility
+    
+    los_weight = None
+    if use_weighted:
+        los_weight = los_loss_config.get("weight", None)
+        if los_weight is not None:
+            los_weight = torch.tensor(los_weight, dtype=torch.float32)
     
     if los_loss_type in ["cross_entropy", "weighted_ce"]:
         los_loss = nn.CrossEntropyLoss(weight=los_weight)
