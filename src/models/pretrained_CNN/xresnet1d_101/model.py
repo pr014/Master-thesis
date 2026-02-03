@@ -172,12 +172,20 @@ class XResNet1D101(BaseECGModel):
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
         
-        # Calculate feature dimension (ECG features + optional demographic features)
+        # Check if diagnosis features are enabled
+        diagnosis_config = data_config.get("diagnosis_features", {})
+        self.use_diagnoses = diagnosis_config.get("enabled", False)
+        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
+        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
+        
+        # Calculate feature dimension (ECG features + optional demographic + diagnosis features)
         feature_dim = 512  # ECG features after global pooling
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3  # binary: [age, sex], onehot: [age, sex_0, sex_1]
             feature_dim += demo_dim
+        if self.use_diagnoses:
+            feature_dim += diagnosis_dim
         
         self.fc = nn.Linear(feature_dim, self.num_classes)
         
@@ -369,13 +377,20 @@ class XResNet1D101(BaseECGModel):
             traceback.print_exc()
             print("Training from scratch.")
     
-    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Forward pass.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             logits: Output logits of shape (B, num_classes)
@@ -399,29 +414,36 @@ class XResNet1D101(BaseECGModel):
         # Head
         ecg_features = self.bn_final(x)  # (B, 512)
         
-        # Late fusion: Concatenate ECG features with demographic features
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
-            # Concatenate: [ECG features, demographic features]
-            fused_features = torch.cat([ecg_features, demographic_features], dim=1)  # (B, 512+2 or 512+3)
-        else:
-            fused_features = ecg_features
+            fused_features = torch.cat([fused_features, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         
         x = self.dropout(fused_features)
         x = self.fc(x)  # (B, num_classes)
         
         return x
     
-    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def get_features(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Extract features before final classification head.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
-            features: Feature tensor of shape (B, 512) or (B, 514/515) after fusion.
-                     If demographic features are enabled, includes demographic features.
+            features: Feature tensor of shape (B, 512) or (B, 512+2/3+diagnosis_dim) after fusion.
+                     If demographic/diagnosis features are enabled, includes them.
         """
         # Stem
         x = self.stem(x)  # (B, 64, 5000)
@@ -442,15 +464,15 @@ class XResNet1D101(BaseECGModel):
         # Apply BN and dropout but not final FC layer
         ecg_features = self.bn_final(x)  # (B, 512)
         
-        # Late fusion: Concatenate ECG features with demographic features
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
-            # Concatenate: [ECG features, demographic features]
-            fused_features = torch.cat([ecg_features, demographic_features], dim=1)  # (B, 512+2 or 512+3)
-        else:
-            fused_features = ecg_features
+            fused_features = torch.cat([fused_features, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         
         # Apply dropout but not final FC layer
         fused_features = self.dropout(fused_features)
         
-        return fused_features  # (B, 512) or (B, 514/515) - features before final fc layer
+        return fused_features  # (B, 512) or (B, 512+2/3+diagnosis_dim) - features before final fc layer
 

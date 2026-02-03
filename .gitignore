@@ -83,3 +83,6 @@ Thumbs.db
 
 # Documentation (local only, not tracked in Git)
 docs/
+
+# Cloned repositories
+clones/

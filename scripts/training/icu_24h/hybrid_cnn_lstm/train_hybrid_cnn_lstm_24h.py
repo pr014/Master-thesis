@@ -1,6 +1,6 @@
 """Training script for Hybrid CNN-LSTM with LOS bin classification.
 This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/24h_weighted/sqrt_weights.yaml (sqrt method)
+Config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
 """
 
 from pathlib import Path
@@ -17,12 +17,13 @@ from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
+from src.data.labeling import get_num_classes_from_config
 
 
 def main():
     """Main training function for 24h dataset with class weights."""
-    # Load configs - using 24h weighted config (sqrt method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
+    # Load configs - using exact_days config (8 classes)
+    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml")
     
     # Optional: Load demographic features config
@@ -39,7 +40,7 @@ def main():
     )
     
     print("="*60)
-    print("Training Hybrid CNN-LSTM with SQRT Class Weights for 24h Dataset")
+    print("Training Hybrid CNN-LSTM with Class Weights for 24h Dataset (Exact Days, 8 Classes)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
@@ -61,7 +62,19 @@ def main():
         print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
     else:
         print(f"Demographic features: Disabled")
+    
+    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
+    if diagnosis_config.get('enabled', False):
+        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
+        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
+    else:
+        print(f"Diagnosis features: Disabled")
     print("="*60)
+    
+    # Override num_classes from los_binning to ensure model uses correct number of classes
+    num_classes = get_num_classes_from_config(config)
+    config["model"]["num_classes"] = num_classes
+    print(f"Number of classes (from los_binning): {num_classes}")
     
     # Load ICU stays and create mapper
     icu_mapper = setup_icustays_mapper(config)

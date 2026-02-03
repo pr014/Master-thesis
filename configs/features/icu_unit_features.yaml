@@ -1,0 +1,35 @@
+# ICU Unit Features Configuration
+# Optional feature: ICU unit type as categorical feature to improve model performance
+# This config can be merged with any base config via experiment_config_path
+
+data:
+  icu_unit_features:
+    enabled: false  # Set to false to disable ICU unit features
+    
+    # ICU unit encoding strategy
+    encoding: "onehot"  # "onehot" (binary features) or "embedding" (learned embeddings)
+    
+    # List of ICU units to include as features (Top 10 most common units)
+    # These cover ~95% of all ICU stays
+    # Remaining rare units will be grouped as "Other"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    
+    # Handling of ICU units not in the list
+    unknown_strategy: "other"  # "other" (group as "Other"), "skip" (skip sample), "most_common" (use most common)
+    
+    # Embedding dimension (only used if encoding="embedding")
+    embedding_dim: 8  # Dimension for ICU unit embeddings
+    
+    # Handling of missing values
+    missing_strategy: "most_common"  # "most_common" (use most common ICU), "skip" (skip sample), "zero" (all zeros)
+

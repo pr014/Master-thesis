@@ -1,0 +1,53 @@
+# Diagnosis Features Configuration (ICD-10 Diagnoses only)
+# Optional features: ICD-10 diagnosis codes as binary features
+# This config can be merged with any base config via experiment_config_path
+# NOTE: This config only contains diagnosis features. Combine with demographic_features_only.yaml if you want both.
+
+data:
+  demographic_features:
+    enabled: false  # DISABLED - Only diagnosis features in this config
+
+  diagnosis_features:
+    enabled: true  # Set to false to disable diagnosis features
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    
+    # List of ICD-10 diagnosis codes to use as binary features (Top 25 based on frequency with time filtering: admittime < ecg_time)
+    # Descriptions from d_icd_diagnoses.csv (ICD-10)
+    # Updated: 2024 - Based on analysis with time filtering to prevent data leakage
+    diagnosis_list:
+      - I10       # Essential (primary) hypertension
+      - E785      # Hyperlipidemia, unspecified
+      - I2510     # Atherosclerotic heart disease of native coronary artery without angina pectoris
+      - I4891     # Unspecified atrial fibrillation
+      - N179      # Acute kidney failure, unspecified
+      - I509      # Heart failure, unspecified
+      - Z87891    # Personal history of nicotine dependence
+      - K219      # Gastro-esophageal reflux disease without esophagitis
+      - E872      # Acidosis
+      - J9690     # Respiratory failure, unspecified, unspecified whether with hypoxia or hypercapnia
+      - D62       # Acute posthemorrhagic anemia
+      - E119      # Type 2 diabetes mellitus without complications
+      - Z7901     # Long term (current) use of anticoagulants
+      - D649      # Anemia, unspecified
+      - N390      # Urinary tract infection, site not specified
+      - R6521     # Severe sepsis with septic shock
+      - Z66       # Do not resuscitate
+      - A419      # Sepsis, unspecified organism
+      - F329      # Major depressive disorder, single episode, unspecified
+      - J189      # Pneumonia, unspecified organism
+      - I129      # Hypertensive chronic kidney disease with stage 1 through stage 4 chronic kidney disease, or unspecified chronic kidney disease
+      - E871      # Hypo-osmolality and hyponatremia
+      - N170      # Acute kidney failure with tubular necrosis
+      - Z781      # Physical restraint status
+      - E039      # Hypothyroidism, unspecified
+    
+    # CSV columns to search for diagnoses (searched in order, first match wins)
+    diagnosis_columns:
+      - "all_diag_all"      # All diagnoses (recommended)
+      - "all_diag_hosp"     # All hospital diagnoses
+      - "hosp_diag_hosp"    # Hospital diagnoses
+      - "ed_diag_hosp"      # ED diagnoses
+    
+    # Handling of missing values
+    missing_strategy: "zero"  # "zero" (use 0 = no diagnosis), "skip" (skip sample)
+

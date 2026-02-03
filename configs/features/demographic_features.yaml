@@ -1,6 +1,7 @@
-# Demographic Features Configuration
-# Optional feature: Age & Sex as additional inputs to improve model performance
+# Demographic Features Configuration (Age + Sex only, NO Diagnoses)
+# Optional features: Age and Sex as additional inputs to improve model performance
 # This config can be merged with any base config via experiment_config_path
+# NOTE: Diagnosis features are DISABLED in this config
 
 data:
   demographic_features:
@@ -18,4 +19,7 @@ data:
     # Handling of missing values
     missing_age_strategy: "median"  # "median" (use median age), "zero" (use 0), or "skip" (skip sample)
     missing_sex_strategy: "default"  # "default" (use most common: M=0), "skip" (skip sample)
+
+  diagnosis_features:
+    enabled: false  # DISABLED - No diagnosis features for this training
 

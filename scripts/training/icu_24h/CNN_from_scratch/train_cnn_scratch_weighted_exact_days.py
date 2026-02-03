@@ -31,9 +31,16 @@ def main():
     base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
+    # Optional: Load demographic and diagnosis features config
+    feature_config_path = Path("configs/features/demographic_features.yaml")
+    if not feature_config_path.exists():
+        feature_config_path = None
+        print("Note: Demographic features config not found. Training without Age, Sex & Diagnosis features.")
+    
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
+        experiment_config_path=feature_config_path,
     )
     
     # Override num_classes from los_binning to ensure model uses correct number of classes
@@ -47,6 +54,8 @@ def main():
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
+    if feature_config_path:
+        print(f"Feature config: {feature_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
     print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
@@ -55,6 +64,20 @@ def main():
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
         print(f"Class weights: {weights}")
+    
+    # Print feature status
+    demographic_config = config.get('data', {}).get('demographic_features', {})
+    if demographic_config.get('enabled', False):
+        print(f"Demographic features: Enabled (Age & Sex)")
+    else:
+        print(f"Demographic features: Disabled")
+    
+    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
+    if diagnosis_config.get('enabled', False):
+        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
+        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
+    else:
+        print(f"Diagnosis features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

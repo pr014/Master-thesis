@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Smoke test for ECG-CPC model.
+"""Smoke test for DeepECG-SL (WCR) model.
 
 Tests:
-- Model creation
+- Model creation (with automatic weight download if API key is set)
 - Forward pass (LOS + Mortality outputs)
 - get_features() method
 - freeze_backbone() and unfreeze_backbone() methods
 - Parameter count verification
-- Pretrained weights loading (mock)
+- Input adapter (5000 → 2500)
+- Multi-Task compatibility
 """
 
 from pathlib import Path
@@ -21,60 +22,65 @@ sys.path.insert(0, str(project_root))
 import torch
 import torch.nn as nn
 
-# Check if S4 is available (from s4-torch or local implementation)
+# Check if fairseq-signals is available
 try:
-    from s4_torch import S4
-    S4_AVAILABLE = True
+    from fairseq_signals.utils import checkpoint_utils
+    FAIRSEQ_AVAILABLE = True
 except ImportError:
-    try:
-        # Try local S4 implementation from ecg-fm-benchmarking repo
-        from src.models.ecg_cpc.s4_impl import S4
-        S4_AVAILABLE = True
-        print("Using S4 from local implementation (ecg-fm-benchmarking repo)")
-    except ImportError:
-        S4_AVAILABLE = False
-        print("WARNING: S4 not available. Tests will be skipped.")
+    FAIRSEQ_AVAILABLE = False
+    print("WARNING: fairseq-signals not available. Some tests will be skipped.")
+    print("Install with: pip install git+https://github.com/HeartWise-AI/fairseq-signals.git")
 
-from src.models import ECG_S4_CPC
+# Check if HuggingFace API key is set
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+if not HUGGINGFACE_API_KEY:
+    print("WARNING: HUGGINGFACE_API_KEY not set. Model download tests will be skipped.")
+    print("Set it with: export HUGGINGFACE_API_KEY='your_key'")
+
+from src.models import DeepECG_SL
 from src.models import MultiTaskECGModel
 from src.utils.config_loader import load_config
 
 
 def test_model_creation():
-    """Test ECG-CPC model creation."""
+    """Test DeepECG-SL model creation."""
     print("\n" + "=" * 80)
     print("Test 1: Model Creation")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("[SKIP] s4-torch not available. Skipping model creation test.")
+    if not FAIRSEQ_AVAILABLE:
+        print("[SKIP] fairseq-signals not available. Skipping model creation test.")
+        return False
+    
+    if not HUGGINGFACE_API_KEY:
+        print("[SKIP] HUGGINGFACE_API_KEY not set. Skipping model creation test.")
         return False
     
     try:
         # Load config
         base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-        model_config_path = Path("configs/model/ecg_cpc/ecg_cpc.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
         
         config = load_config(
             base_config_path=base_config_path,
             model_config_path=model_config_path,
         )
         
-        # Create model
-        model = ECG_S4_CPC(config)
-        print(f"[OK] ECG_S4_CPC model created")
+        # Create model (will download weights automatically if not cached)
+        print("Creating DeepECG-SL model...")
+        print("This may take a while on first run (downloading pretrained weights)...")
+        model = DeepECG_SL(config)
+        print(f"[OK] DeepECG_SL model created")
         
         # Count parameters
         num_params = model.count_parameters()
         print(f"[OK] Total parameters: {num_params:,}")
         
-        # Expected: ~2.2M parameters (S4 encoder ~1.8M, heads ~400K)
+        # Expected: Large model with WCR encoder
         if num_params < 1_000_000:
-            print(f"[WARNING] Parameter count seems low (expected ~2.2M)")
-        elif num_params > 5_000_000:
-            print(f"[WARNING] Parameter count seems high (expected ~2.2M)")
+            print(f"[WARNING] Parameter count seems low (expected >1M)")
         else:
-            print(f"[OK] Parameter count in expected range (~2.2M)")
+            print(f"[OK] Parameter count in expected range (>1M)")
         
         return True
     except Exception as e:
@@ -90,14 +96,14 @@ def test_forward_pass():
     print("Test 2: Forward Pass")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("[SKIP] s4-torch not available. Skipping forward pass test.")
+    if not FAIRSEQ_AVAILABLE or not HUGGINGFACE_API_KEY:
+        print("[SKIP] Prerequisites not met. Skipping forward pass test.")
         return False
     
     try:
         # Load config
         base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-        model_config_path = Path("configs/model/ecg_cpc/ecg_cpc.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
         
         config = load_config(
             base_config_path=base_config_path,
@@ -105,7 +111,7 @@ def test_forward_pass():
         )
         
         # Create model
-        model = ECG_S4_CPC(config)
+        model = DeepECG_SL(config)
         model.eval()
         
         # Create dummy input
@@ -156,14 +162,14 @@ def test_get_features():
     print("Test 3: get_features() Method")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("[SKIP] s4-torch not available. Skipping get_features() test.")
+    if not FAIRSEQ_AVAILABLE or not HUGGINGFACE_API_KEY:
+        print("[SKIP] Prerequisites not met. Skipping get_features() test.")
         return False
     
     try:
         # Load config
         base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-        model_config_path = Path("configs/model/ecg_cpc/ecg_cpc.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
         
         config = load_config(
             base_config_path=base_config_path,
@@ -171,7 +177,7 @@ def test_get_features():
         )
         
         # Create model
-        model = ECG_S4_CPC(config)
+        model = DeepECG_SL(config)
         model.eval()
         
         # Create dummy input
@@ -204,14 +210,14 @@ def test_freeze_unfreeze():
     print("Test 4: freeze_backbone() and unfreeze_backbone()")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("[SKIP] s4-torch not available. Skipping freeze/unfreeze test.")
+    if not FAIRSEQ_AVAILABLE or not HUGGINGFACE_API_KEY:
+        print("[SKIP] Prerequisites not met. Skipping freeze/unfreeze test.")
         return False
     
     try:
         # Load config
         base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-        model_config_path = Path("configs/model/ecg_cpc/ecg_cpc.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
         
         config = load_config(
             base_config_path=base_config_path,
@@ -219,24 +225,33 @@ def test_freeze_unfreeze():
         )
         
         # Create model
-        model = ECG_S4_CPC(config)
+        model = DeepECG_SL(config)
         
-        # Check initial state (should be trainable)
-        s4_params = list(model.s4_encoder.parameters())
-        initial_requires_grad = [p.requires_grad for p in s4_params]
-        print(f"[OK] Initial S4 encoder requires_grad: {all(initial_requires_grad)}")
+        # Check initial state (should be frozen by default)
+        wcr_params = list(model.wcr_encoder.parameters())
+        adapter_params = list(model.input_adapter.parameters())
+        
+        initial_wcr_grad = [p.requires_grad for p in wcr_params]
+        initial_adapter_grad = [p.requires_grad for p in adapter_params]
+        
+        print(f"[OK] Initial WCR encoder requires_grad: {any(initial_wcr_grad)}")
+        print(f"[OK] Initial Input adapter requires_grad: {any(initial_adapter_grad)}")
         
         # Freeze backbone
         model.freeze_backbone()
-        frozen_requires_grad = [p.requires_grad for p in s4_params]
-        assert not any(frozen_requires_grad), "S4 encoder should be frozen"
-        print(f"[OK] S4 encoder frozen (requires_grad=False)")
+        frozen_wcr_grad = [p.requires_grad for p in wcr_params]
+        frozen_adapter_grad = [p.requires_grad for p in adapter_params]
+        assert not any(frozen_wcr_grad), "WCR encoder should be frozen"
+        assert not any(frozen_adapter_grad), "Input adapter should be frozen"
+        print(f"[OK] Backbone frozen (requires_grad=False)")
         
         # Unfreeze backbone
         model.unfreeze_backbone()
-        unfrozen_requires_grad = [p.requires_grad for p in s4_params]
-        assert all(unfrozen_requires_grad), "S4 encoder should be unfrozen"
-        print(f"[OK] S4 encoder unfrozen (requires_grad=True)")
+        unfrozen_wcr_grad = [p.requires_grad for p in wcr_params]
+        unfrozen_adapter_grad = [p.requires_grad for p in adapter_params]
+        assert all(unfrozen_wcr_grad), "WCR encoder should be unfrozen"
+        assert all(unfrozen_adapter_grad), "Input adapter should be unfrozen"
+        print(f"[OK] Backbone unfrozen (requires_grad=True)")
         
         return True
     except Exception as e:
@@ -246,20 +261,65 @@ def test_freeze_unfreeze():
         return False
 
 
+def test_input_adapter():
+    """Test input adapter (5000 → 2500)."""
+    print("\n" + "=" * 80)
+    print("Test 5: Input Adapter (5000 → 2500)")
+    print("=" * 80)
+    
+    try:
+        # Load config
+        base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
+        
+        config = load_config(
+            base_config_path=base_config_path,
+            model_config_path=model_config_path,
+        )
+        
+        from src.models.deepecg_sl.input_adapter import InputAdapter
+        
+        # Create input adapter
+        adapter = InputAdapter(config)
+        
+        # Test input
+        batch_size = 2
+        x = torch.randn(batch_size, 12, 5000)
+        
+        # Forward pass
+        with torch.no_grad():
+            y = adapter(x)
+        
+        print(f"[OK] Input shape: {x.shape}")
+        print(f"[OK] Output shape: {y.shape} (expected: ({batch_size}, 12, 2500))")
+        
+        # Verify shape
+        assert y.shape == (batch_size, 12, 2500), f"Expected output shape ({batch_size}, 12, 2500), got {y.shape}"
+        
+        print(f"[OK] Input adapter works correctly")
+        
+        return True
+    except Exception as e:
+        print(f"[ERROR] Input adapter test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def test_multitask_compatibility():
     """Test MultiTaskECGModel compatibility."""
     print("\n" + "=" * 80)
-    print("Test 5: MultiTaskECGModel Compatibility")
+    print("Test 6: MultiTaskECGModel Compatibility")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("[SKIP] s4-torch not available. Skipping MultiTask compatibility test.")
+    if not FAIRSEQ_AVAILABLE or not HUGGINGFACE_API_KEY:
+        print("[SKIP] Prerequisites not met. Skipping MultiTask compatibility test.")
         return False
     
     try:
         # Load config
         base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
-        model_config_path = Path("configs/model/ecg_cpc/ecg_cpc.yaml")
+        model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
         
         config = load_config(
             base_config_path=base_config_path,
@@ -267,7 +327,7 @@ def test_multitask_compatibility():
         )
         
         # Create base model
-        base_model = ECG_S4_CPC(config)
+        base_model = DeepECG_SL(config)
         
         # Wrap in MultiTaskECGModel
         model = MultiTaskECGModel(base_model, config)
@@ -310,12 +370,19 @@ def test_multitask_compatibility():
 def main():
     """Run all smoke tests."""
     print("=" * 80)
-    print("Smoke Test: ECG-CPC Model")
+    print("Smoke Test: DeepECG-SL (WCR) Model")
     print("=" * 80)
     
-    if not S4_AVAILABLE:
-        print("\nWARNING: s4-torch is not installed.")
-        print("Some tests will be skipped. Install with: pip install s4-torch")
+    if not FAIRSEQ_AVAILABLE:
+        print("\nWARNING: fairseq-signals is not installed.")
+        print("Some tests will be skipped. Install with:")
+        print("  pip install git+https://github.com/HeartWise-AI/fairseq-signals.git")
+        print("=" * 80)
+    
+    if not HUGGINGFACE_API_KEY:
+        print("\nWARNING: HUGGINGFACE_API_KEY is not set.")
+        print("Model download tests will be skipped. Set it with:")
+        print("  export HUGGINGFACE_API_KEY='your_key'")
         print("=" * 80)
     
     tests = [
@@ -323,6 +390,7 @@ def main():
         ("Forward Pass", test_forward_pass),
         ("get_features()", test_get_features),
         ("freeze/unfreeze", test_freeze_unfreeze),
+        ("Input Adapter", test_input_adapter),
         ("MultiTask Compatibility", test_multitask_compatibility),
     ]
     
@@ -354,7 +422,7 @@ def main():
     print("=" * 80)
     if all_passed:
         print("[SUCCESS] All smoke tests passed!")
-        print("ECG-CPC model is ready to use.")
+        print("DeepECG-SL model is ready to use.")
     else:
         print("[FAILURE] Some smoke tests failed. Please fix the issues above.")
     print("=" * 80)

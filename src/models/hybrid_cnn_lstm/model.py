@@ -121,12 +121,20 @@ class HybridCNNLSTM(BaseECGModel):
         data_config = config.get("data", {})
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
+        
+        # Check if diagnosis features are enabled
+        diagnosis_config = data_config.get("diagnosis_features", {})
+        self.use_diagnoses = diagnosis_config.get("enabled", False)
+        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
+        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
 
         feature_dim = lstm_output_dim
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3
             feature_dim += demo_dim
+        if self.use_diagnoses:
+            feature_dim += diagnosis_dim
 
         # Shared layer
         self.bn_final = nn.BatchNorm1d(feature_dim)
@@ -150,7 +158,10 @@ class HybridCNNLSTM(BaseECGModel):
         )
 
     def _forward_features(
-        self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         # CNN blocks
         x = self.conv1(x)
@@ -184,11 +195,12 @@ class HybridCNNLSTM(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)
 
-        # Late fusion with demographics
+        # Late fusion with demographics and diagnoses
+        fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
-            fused_features = torch.cat([ecg_features, demographic_features], dim=1)
-        else:
-            fused_features = ecg_features
+            fused_features = torch.cat([fused_features, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
 
         # Shared layer
         x = self.bn_final(fused_features)
@@ -200,14 +212,20 @@ class HybridCNNLSTM(BaseECGModel):
         return x
 
     def forward(
-        self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Forward pass returning LOS logits."""
-        features = self._forward_features(x, demographic_features=demographic_features)
+        features = self._forward_features(x, demographic_features=demographic_features, diagnosis_features=diagnosis_features)
         return self.fc_los(features)
 
     def get_features(
-        self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Extract features before final LOS head."""
-        return self._forward_features(x, demographic_features=demographic_features)
+        return self._forward_features(x, demographic_features=demographic_features, diagnosis_features=diagnosis_features)

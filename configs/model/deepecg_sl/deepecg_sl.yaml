@@ -1,0 +1,33 @@
+# DeepECG-SL (WCR) model-specific configuration
+# Self-supervised pretrained model with Transfer Learning
+
+model:
+  type: "DeepECG_SL"
+  num_classes: 8  # Will be overridden by los_binning config (exact_days with max_days=7)
+  
+  # WCR Encoder Configuration
+  wcr:
+    model_name: "wcr_77_classes"
+    huggingface_repo: "heartwise/wcr_77_classes"
+    base_ssl_path: "base_ssl.pt"
+    d_model: 512                    # Hidden dimension from checkpoint
+    freeze_backbone: true           # Initial freeze for transfer learning
+    
+  # Input Adapter Configuration
+  input_adapter:
+    type: "conv1d"                  # conv1d, linear, or pooling
+    in_length: 5000
+    out_length: 2500
+    kernel_size: 3
+    stride: 2
+    
+  # Pretrained weights (automatic download)
+  pretrained:
+    enabled: true
+    cache_dir: "data/pretrained_weights/deepecg_sl"
+    # API Key from environment variable HUGGINGFACE_API_KEY
+    
+  # Feature dimensions
+  feature_dim: 512                  # Output from WCR encoder
+  shared_dim: 128                   # Shared layer dimension
+

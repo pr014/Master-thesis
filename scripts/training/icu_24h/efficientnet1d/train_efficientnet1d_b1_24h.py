@@ -1,6 +1,6 @@
 """Training script for EfficientNet1D-B1 with LOS bin classification.
 This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/24h_weighted/sqrt_weights.yaml (sqrt method)
+Config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
 """
 
 from pathlib import Path
@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from src.models import EfficientNet1D_B1
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
+from src.data.labeling import get_num_classes_from_config
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
@@ -21,8 +22,8 @@ from src.utils.config_loader import load_config
 
 def main():
     """Main training function for 24h dataset with class weights."""
-    # Load configs - using 24h weighted config (sqrt method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")
+    # Load configs - using exact_days config (8 classes)
+    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/efficientnet1d/efficientnet1d_b1_scratch.yaml")
     
     # Optional: Load demographic features config
@@ -37,18 +38,26 @@ def main():
         experiment_config_path=feature_config_path,
     )
     
+    # Override num_classes from los_binning to ensure model uses correct number of classes
+    # This makes the script flexible for different los_binning strategies
+    num_classes = get_num_classes_from_config(config)
+    config["model"]["num_classes"] = num_classes
+    
     print("="*60)
-    print("Training EfficientNet1D-B1 with SQRT Class Weights for 24h Dataset")
+    print("Training EfficientNet1D-B1 with Class Weights for 24h Dataset (Exact Days, 8 Classes)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     if feature_config_path:
         print(f"Feature config: {feature_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
+    print(f"Number of classes: {num_classes}")
+    los_binning = config.get('data', {}).get('los_binning', {})
+    print(f"LOS binning: strategy={los_binning.get('strategy', 'unknown')}, max_days={los_binning.get('max_days', 'N/A')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights (SQRT): {weights}")
+        print(f"Class weights: {weights}")
     pretrained_config = config.get('model', {}).get('pretrained', {})
     if pretrained_config.get('enabled', False):
         print(f"Pretrained weights: {pretrained_config.get('weights_path', 'N/A')}")
@@ -60,6 +69,13 @@ def main():
         print(f"Demographic features: Enabled (Age & Sex)")
     else:
         print(f"Demographic features: Disabled")
+    
+    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
+    if diagnosis_config.get('enabled', False):
+        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
+        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
+    else:
+        print(f"Diagnosis features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

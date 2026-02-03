@@ -82,6 +82,13 @@ def main():
         print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
     else:
         print(f"Demographic features: Disabled")
+    
+    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
+    if diagnosis_config.get('enabled', False):
+        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
+        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
+    else:
+        print(f"Diagnosis features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

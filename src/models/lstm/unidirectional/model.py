@@ -118,12 +118,20 @@ class LSTM1D_Unidirectional(BaseECGModel):
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
         
-        # Calculate feature dimension (LSTM features + optional demographic features)
+        # Check if diagnosis features are enabled
+        diagnosis_config = data_config.get("diagnosis_features", {})
+        self.use_diagnoses = diagnosis_config.get("enabled", False)
+        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
+        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
+        
+        # Calculate feature dimension (LSTM features + optional demographic + diagnosis features)
         feature_dim = lstm_output_dim
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3  # binary: [age, sex], onehot: [age, sex_0, sex_1]
             feature_dim += demo_dim
+        if self.use_diagnoses:
+            feature_dim += diagnosis_dim
         
         # Classification Head
         self.bn_final = nn.BatchNorm1d(feature_dim)
@@ -151,13 +159,20 @@ class LSTM1D_Unidirectional(BaseECGModel):
         else:
             raise ValueError(f"Unknown pooling strategy: {self.pooling}. Use 'last', 'mean', or 'max'.")
     
-    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Forward pass.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             logits: Output logits of shape (B, num_classes)
@@ -180,12 +195,12 @@ class LSTM1D_Unidirectional(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim_layer2)
         
-        # Late fusion: Concatenate ECG features with demographic features
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
-            # Concatenate: [ECG features, demographic features]
-            fused_features = torch.cat([ecg_features, demographic_features], dim=1)
-        else:
-            fused_features = ecg_features
+            fused_features = torch.cat([fused_features, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         
         # Classification Head
         x = self.bn_final(fused_features)
@@ -194,17 +209,24 @@ class LSTM1D_Unidirectional(BaseECGModel):
         
         return x
     
-    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def get_features(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Extract features before final classification head.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             features: Feature tensor of shape (B, feature_dim) after pooling and before fc.
-                     If demographic features are enabled, this includes the demographic features.
+                     If demographic/diagnosis features are enabled, this includes them.
         """
         # Transform input: (B, 12, 5000) → (B, 5000, 12)
         x = x.transpose(1, 2)  # (B, 5000, 12)
@@ -224,12 +246,12 @@ class LSTM1D_Unidirectional(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim_layer2)
         
-        # Late fusion: Concatenate ECG features with demographic features
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
-            # Concatenate: [ECG features, demographic features]
-            fused_features = torch.cat([ecg_features, demographic_features], dim=1)
-        else:
-            fused_features = ecg_features
+            fused_features = torch.cat([fused_features, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         
         # Apply BatchNorm and Dropout but not final FC layer
         x = self.bn_final(fused_features)

@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -28,6 +28,9 @@ class ParsedResults:
     per_class: Dict[int, Dict[str, float]]
     confusion_matrix: Optional[List[List[int]]]
     num_stays_evaluated: Optional[int]
+    train_metrics: Dict[str, float] = field(default_factory=dict)
+    val_metrics: Dict[str, float] = field(default_factory=dict)
+    training_history: Dict[str, List[float]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -37,6 +40,9 @@ class ParsedResults:
             "num_stays_evaluated": self.num_stays_evaluated,
             "per_class": self.per_class,
             "confusion_matrix": self.confusion_matrix,
+            "train_metrics": self.train_metrics,
+            "val_metrics": self.val_metrics,
+            "training_history": self.training_history,
         }
 
 
@@ -48,6 +54,87 @@ def _extract_job_id(text: str) -> Optional[int]:
 def _extract_best_val_loss(text: str) -> Optional[float]:
     m = re.search(r"\bBest validation loss:\s*(%s)\b" % _RE_FLOAT, text)
     return float(m.group(1)) if m else None
+
+
+def _extract_training_metrics(text: str) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, List[float]]]:
+    """
+    Extract training and validation metrics from epoch logs.
+    
+    Looks for lines like:
+    "Epoch 1/50 - Train Loss: 3.1234, Train LOS Acc: 0.2345, Val Loss: 2.9876, Val LOS Acc: 0.3456"
+    or with mortality:
+    "Epoch 1/50 - Train Loss: 3.1234, Train LOS Acc: 0.2345, Val Loss: 2.9876, Val LOS Acc: 0.3456"
+    "           Mortality - Val Acc: 0.7654, Val AUC: 0.8234"
+    
+    Returns:
+        Tuple of (final_train_metrics, final_val_metrics, training_history)
+    """
+    train_metrics: Dict[str, float] = {}
+    val_metrics: Dict[str, float] = {}
+    history: Dict[str, List[float]] = {
+        "train_loss": [],
+        "train_los_acc": [],
+        "val_loss": [],
+        "val_los_acc": [],
+        "val_mortality_acc": [],
+        "val_mortality_auc": [],
+    }
+    
+    # Pattern to match epoch log lines
+    # Format: "Epoch X/Y - Train Loss: X.XXXX, Train LOS Acc: X.XXXX, Val Loss: X.XXXX, Val LOS Acc: X.XXXX"
+    epoch_pattern = re.compile(
+        r"Epoch\s+(\d+)/(\d+)\s+-\s+"
+        r"Train Loss:\s+(%s),\s+"
+        r"Train LOS Acc:\s+(%s),\s+"
+        r"Val Loss:\s+(%s),\s+"
+        r"Val LOS Acc:\s+(%s)" % (_RE_FLOAT, _RE_FLOAT, _RE_FLOAT, _RE_FLOAT),
+        re.IGNORECASE
+    )
+    
+    # Pattern for mortality metrics (optional, on next line)
+    mortality_pattern = re.compile(
+        r"Mortality\s*-\s*"
+        r"Val Acc:\s+(%s),\s+"
+        r"Val AUC:\s+(%s)" % (_RE_FLOAT, _RE_FLOAT),
+        re.IGNORECASE
+    )
+    
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        # Match epoch line
+        epoch_match = epoch_pattern.search(line)
+        if epoch_match:
+            epoch_num = int(epoch_match.group(1))
+            train_loss = float(epoch_match.group(3))
+            train_acc = float(epoch_match.group(4))
+            val_loss = float(epoch_match.group(5))
+            val_acc = float(epoch_match.group(6))
+            
+            # Store in history
+            history["train_loss"].append(train_loss)
+            history["train_los_acc"].append(train_acc)
+            history["val_loss"].append(val_loss)
+            history["val_los_acc"].append(val_acc)
+            
+            # Update final metrics (last epoch wins)
+            train_metrics["train_loss"] = train_loss
+            train_metrics["train_los_acc"] = train_acc
+            val_metrics["val_loss"] = val_loss
+            val_metrics["val_los_acc"] = val_acc
+            
+            # Check next line for mortality metrics
+            if i + 1 < len(lines):
+                next_line = lines[i + 1]
+                mort_match = mortality_pattern.search(next_line)
+                if mort_match:
+                    val_mort_acc = float(mort_match.group(1))
+                    val_mort_auc = float(mort_match.group(2))
+                    history["val_mortality_acc"].append(val_mort_acc)
+                    history["val_mortality_auc"].append(val_mort_auc)
+                    val_metrics["val_mortality_acc"] = val_mort_acc
+                    val_metrics["val_mortality_auc"] = val_mort_auc
+    
+    return train_metrics, val_metrics, history
 
 
 def _extract_test_block(text: str) -> Optional[str]:
@@ -228,6 +315,9 @@ def parse_log_text(text: str) -> ParsedResults:
         test_metrics, num_stays = _parse_key_metrics(test_block)
         per_class = _parse_per_class(test_block)
         cm = _parse_confusion_matrix(test_block)
+    
+    # Extract training/validation metrics from epoch logs
+    train_metrics, val_metrics, training_history = _extract_training_metrics(text)
 
     return ParsedResults(
         job_id=job_id,
@@ -236,6 +326,9 @@ def parse_log_text(text: str) -> ParsedResults:
         per_class=per_class,
         confusion_matrix=cm,
         num_stays_evaluated=num_stays,
+        train_metrics=train_metrics,
+        val_metrics=val_metrics,
+        training_history=training_history,
     )
 
 
@@ -267,17 +360,153 @@ def main() -> None:
 
     print(f"job_id: {parsed.job_id}")
     print(f"best_val_loss: {parsed.best_val_loss}")
-    if not parsed.test_metrics:
-        print("test_metrics: <not found in log>")
-        return
-
-    print("test_metrics:")
-    for k, v in parsed.test_metrics.items():
-        print(f"  {k}: {v}")
-    print(f"num_stays_evaluated: {parsed.num_stays_evaluated}")
+    
+    # Print test metrics first (needed for overfitting analysis)
+    if parsed.test_metrics:
+        print("\n🔹 Test Metrics:")
+        # Print LOS metrics first, then mortality metrics (preserve logical order)
+        los_metric_keys = [k for k in parsed.test_metrics.keys() if k.startswith('los_') or k.startswith('test_los_')]
+        mortality_metric_keys = [k for k in parsed.test_metrics.keys() if k.startswith('mortality_')]
+        other_metric_keys = [k for k in parsed.test_metrics.keys() if k not in los_metric_keys and k not in mortality_metric_keys]
+        
+        # Print in order: LOS metrics, then mortality, then others
+        for key_list in [los_metric_keys, mortality_metric_keys, other_metric_keys]:
+            for k in sorted(key_list):
+                print(f"  {k}: {parsed.test_metrics[k]:.4f}")
+        print(f"num_stays_evaluated: {parsed.num_stays_evaluated}")
+    else:
+        print("\n🔹 Test Metrics: <not found in log>")
+    
+    # Overfitting Analysis Section
+    print("\n" + "="*80)
+    print("🔍 OVERFITTING ANALYSIS")
+    print("="*80)
+    
+    if parsed.train_metrics or parsed.val_metrics:
+        # Final epoch metrics
+        if parsed.train_metrics:
+            print("\n📊 Final Training Metrics (last epoch):")
+            for k, v in sorted(parsed.train_metrics.items()):
+                print(f"  {k}: {v:.4f}")
+        else:
+            print("\n📊 Final Training Metrics: <not found in log>")
+        
+        if parsed.val_metrics:
+            print("\n📊 Final Validation Metrics (last epoch):")
+            for k, v in sorted(parsed.val_metrics.items()):
+                print(f"  {k}: {v:.4f}")
+        else:
+            print("\n📊 Final Validation Metrics: <not found in log>")
+        
+        # Overfitting indicators
+        print("\n🔬 Overfitting Indicators:")
+        
+        # 1. Train vs Val Loss Gap
+        if parsed.train_metrics and parsed.val_metrics:
+            train_loss = parsed.train_metrics.get("train_loss")
+            val_loss = parsed.val_metrics.get("val_loss")
+            train_acc = parsed.train_metrics.get("train_los_acc")
+            val_acc = parsed.val_metrics.get("val_los_acc")
+            
+            if train_loss is not None and val_loss is not None:
+                loss_gap = train_loss - val_loss
+                print(f"  Loss Gap (Train - Val): {loss_gap:.4f}")
+                if loss_gap < -0.1:
+                    print("    ⚠️  WARNING: Val loss >> Train loss (strong overfitting signal)")
+                elif loss_gap < -0.05:
+                    print("    ⚠️  CAUTION: Val loss > Train loss (possible overfitting)")
+                elif loss_gap > 0.5:
+                    print("    ℹ️  Train loss > Val loss (normal, model still learning)")
+                else:
+                    print("    ✅ Loss gap is reasonable")
+            
+            # 2. Train vs Val Accuracy Gap
+            if train_acc is not None and val_acc is not None:
+                acc_gap = train_acc - val_acc
+                print(f"  Accuracy Gap (Train - Val): {acc_gap:.4f}")
+                if acc_gap > 0.15:
+                    print("    ⚠️  WARNING: Large accuracy gap (Train >> Val) suggests overfitting")
+                elif acc_gap > 0.10:
+                    print("    ⚠️  CAUTION: Moderate accuracy gap (possible overfitting)")
+                elif acc_gap < -0.05:
+                    print("    ℹ️  Val accuracy > Train (unusual, check data splits)")
+                else:
+                    print("    ✅ Accuracy gap is reasonable")
+        
+        # 3. Best Val Loss vs Final Val Loss
+        if parsed.best_val_loss is not None and parsed.val_metrics:
+            final_val_loss = parsed.val_metrics.get("val_loss")
+            if final_val_loss is not None:
+                val_loss_deterioration = final_val_loss - parsed.best_val_loss
+                print(f"  Val Loss Deterioration (Final - Best): {val_loss_deterioration:.4f}")
+                print(f"    Best Val Loss: {parsed.best_val_loss:.4f}")
+                print(f"    Final Val Loss: {final_val_loss:.4f}")
+                if val_loss_deterioration > 0.1:
+                    print("    ⚠️  WARNING: Val loss increased significantly after best (overfitting)")
+                elif val_loss_deterioration > 0.05:
+                    print("    ⚠️  CAUTION: Val loss increased after best (possible overfitting)")
+                elif val_loss_deterioration < 0:
+                    print("    ✅ Final val loss improved from best (good)")
+                else:
+                    print("    ✅ Val loss stable")
+        
+        # 4. Test vs Val Comparison
+        if parsed.test_metrics and parsed.val_metrics:
+            test_loss = parsed.test_metrics.get("test_los_loss")
+            val_loss = parsed.val_metrics.get("val_loss")
+            test_acc = parsed.test_metrics.get("test_los_accuracy")
+            val_acc = parsed.val_metrics.get("val_los_acc")
+            
+            if test_loss is not None and val_loss is not None:
+                test_val_loss_gap = test_loss - val_loss
+                print(f"  Test vs Val Loss Gap: {test_val_loss_gap:.4f}")
+                if test_val_loss_gap > 0.2:
+                    print("    ⚠️  WARNING: Test loss >> Val loss (poor generalization)")
+                elif test_val_loss_gap > 0.1:
+                    print("    ⚠️  CAUTION: Test loss > Val loss (possible overfitting)")
+                elif test_val_loss_gap < -0.1:
+                    print("    ℹ️  Test loss < Val loss (unusual, check data splits)")
+                else:
+                    print("    ✅ Test and Val loss are similar (good generalization)")
+            
+            if test_acc is not None and val_acc is not None:
+                test_val_acc_gap = test_acc - val_acc
+                print(f"  Test vs Val Accuracy Gap: {test_val_acc_gap:.4f}")
+                if test_val_acc_gap < -0.1:
+                    print("    ⚠️  WARNING: Test accuracy << Val accuracy (poor generalization)")
+                elif test_val_acc_gap < -0.05:
+                    print("    ⚠️  CAUTION: Test accuracy < Val accuracy (possible overfitting)")
+                elif test_val_acc_gap > 0.1:
+                    print("    ℹ️  Test accuracy > Val accuracy (unusual, check data splits)")
+                else:
+                    print("    ✅ Test and Val accuracy are similar (good generalization)")
+        
+        # 5. Training History Summary (if available)
+        if parsed.training_history:
+            history = parsed.training_history
+            if history.get("train_loss") and history.get("val_loss"):
+                train_losses = history["train_loss"]
+                val_losses = history["val_loss"]
+                if len(train_losses) > 1 and len(val_losses) > 1:
+                    # Check if val loss is increasing in last epochs (overfitting signal)
+                    last_n = min(5, len(val_losses))
+                    if last_n > 1:
+                        recent_val_losses = val_losses[-last_n:]
+                        val_loss_trend = recent_val_losses[-1] - recent_val_losses[0]
+                        print(f"\n  Training History (last {last_n} epochs):")
+                        print(f"    Val Loss Trend: {val_loss_trend:+.4f}")
+                        if val_loss_trend > 0.05:
+                            print("    ⚠️  WARNING: Val loss increasing in recent epochs (overfitting)")
+                        elif val_loss_trend > 0.02:
+                            print("    ⚠️  CAUTION: Val loss slightly increasing (watch for overfitting)")
+                        else:
+                            print("    ✅ Val loss stable or decreasing")
+    else:
+        print("\n⚠️  Cannot analyze overfitting: Train/Val metrics not found in log")
+        print("   (Metrics will be available for jobs run after the trainer.py update)")
 
     if parsed.per_class:
-        print("per_class (precision/recall/f1):")
+        print("\n🔹 Per-Class Metrics (precision/recall/f1):")
         for cls in sorted(parsed.per_class.keys()):
             m = parsed.per_class[cls]
             print(f"  {cls}: p={m['precision']:.4f} r={m['recall']:.4f} f1={m['f1']:.4f}")

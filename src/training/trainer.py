@@ -232,21 +232,27 @@ class Trainer:
             
             # Logging
             if epoch % log_frequency == 0 or epoch == 1:
-                self.logger.info(
+                log_msg = (
                     f"Epoch {epoch}/{num_epochs} - "
                     f"Train Loss: {train_metrics.get('train_loss', 0.0):.4f}, "
                     f"Train LOS Acc: {train_metrics.get('train_los_acc', 0.0):.4f}, "
                     f"Val Loss: {val_metrics.get('val_loss', 0.0):.4f}, "
                     f"Val LOS Acc: {val_metrics.get('val_los_acc', 0.0):.4f}"
                 )
+                self.logger.info(log_msg)
+                # Also print to stdout (captured by SLURM) for parsing
+                print(log_msg)
 
                 # Extra logging if mortality metrics are available
                 if "val_mortality_acc" in val_metrics or "val_mortality_auc" in val_metrics:
-                    self.logger.info(
+                    mort_msg = (
                         f"           Mortality - "
                         f"Val Acc: {val_metrics.get('val_mortality_acc', 0.0):.4f}, "
                         f"Val AUC: {val_metrics.get('val_mortality_auc', 0.0):.4f}"
                     )
+                    self.logger.info(mort_msg)
+                    # Also print to stdout (captured by SLURM) for parsing
+                    print(mort_msg)
             
             # TensorBoard logging
             if self.tb_logger is not None:

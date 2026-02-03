@@ -19,6 +19,7 @@ MA-thesis-1/
 ### `configs/`
 - **`all_icu_ecgs/`** - Configs for full ICU ECG dataset
 - **`icu_24h/`** - Configs for 24-hour ICU ECG dataset
+  - `output/` - Output-specific configs (weighted_exact_days, weighted_intervals)
 - **`model/`** - Model architecture configurations
   - `efficientnet1d/` - EfficientNet1D-B1 configs
   - `xresnet1d_101/` - FastAI xResNet1D-101 configs
@@ -26,7 +27,9 @@ MA-thesis-1/
   - `lstm/` - LSTM model configs
     - `unidirectional/` - Unidirectional LSTM configs
     - `bidirectional/` - Bidirectional LSTM configs
-- **`features/`** - Feature configuration (e.g., demographic features)
+  - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM configs
+- **`features/`** - Feature configuration
+  - `demographic_features.yaml` - Demographic and diagnosis features configuration
 - **`visualization/`** - Paths for visualization scripts
 - **`weights/`** - Class weight configurations
 
@@ -41,6 +44,7 @@ MA-thesis-1/
     - `efficientnet1d/` - EfficientNet1D-B1 training scripts
     - `xresnet1d_101/` - FastAI xResNet1D-101 training scripts
     - `lstm/` - LSTM training scripts (unidirectional and bidirectional)
+    - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM training scripts
   - `all_icu_ecgs/` - Training scripts for full dataset
 - **`cluster/`** - SLURM job scripts for cluster execution
   - Mirrors the structure of `scripts/training/`
@@ -63,6 +67,7 @@ MA-thesis-1/
   - `lstm/` - LSTM models
     - `unidirectional/` - Unidirectional LSTM (LSTM1D_Unidirectional)
     - `bidirectional/` - Bidirectional LSTM (LSTM1D_Bidirectional)
+  - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM architecture
 - **`training/`** - Training loop and trainer classes
 - **`evaluation/`** - Evaluation metrics and utilities
 - **`utils/`** - Utility functions and helpers
@@ -83,8 +88,10 @@ MA-thesis-1/
 
 ### `outputs/` (not tracked in git)
 - **`checkpoints/`** - Model checkpoints
+- **`logs/`** - SLURM job logs (slurm_*.out, slurm_*.err)
 - **`training/`** - Training logs and results
-- **`data_analysis/`** - Analysis outputs
+- **`analysis/`** - Analysis outputs
+  - `demographic_and_EHR_data/` - Demographic and diagnosis analysis visualizations
 - **`visualizations/`** - Generated plots and figures
 
 ## Model Architectures
@@ -97,21 +104,48 @@ MA-thesis-1/
 
 ### LSTM Models
 - **LSTM1D_Unidirectional**: Unidirectional LSTM for ECG time series classification
-  - Architecture: 1-2 LSTM layers, hidden dimension 256, pooling strategies (last/mean/max)
-  - Parameters: ~280K (1 layer) or ~806K (2 layers)
+  - Architecture: 1-2 LSTM layers, hidden dimension 128, pooling strategies (last/mean/max)
+  - Parameters: ~74K (1 layer) or ~280K (2 layers)
   - Use case: Real-time ICU deployment scenarios (only uses past information)
   
 - **LSTM1D_Bidirectional**: Bidirectional LSTM for ECG time series classification
-  - Architecture: 1-2 bidirectional LSTM layers, 64 hidden units per direction (128 total), pooling strategies (last/mean/max)
-  - Parameters: ~500-600K (1 layer) or ~900K (2 layers)
+  - Architecture: 1-2 bidirectional LSTM layers, 128 hidden units per direction (256 total), pooling strategies (last/mean/max)
+  - Parameters: ~150K (1 layer) or ~900K (2 layers)
   - Use case: Retrospective analysis and scientific comparison (uses both past and future information)
   - Scientific justification: Based on Yildirim (2018, IEEE Access) and Lipton et al. (2016, arXiv) for ECG classification and clinical time series analysis
+
+### Hybrid Models
+- **HybridCNNLSTM**: Combined CNN and LSTM architecture
+  - Architecture: CNN feature extraction (3 conv blocks) → LSTM temporal modeling → Classification head
+  - Parameters: ~700K-1M depending on configuration
+  - Use case: Captures both spatial (CNN) and temporal (LSTM) patterns in ECG signals
 
 All models support:
 - Multi-task learning (LOS classification + Mortality prediction)
 - Optional demographic features (Age & Sex) via late fusion
-- SQRT class weighting for imbalanced LOS classes
+- Optional diagnosis features (ICD-10 codes) via late fusion
+  - Supports top 15 most frequent diagnoses (configurable)
+  - Binary encoding per diagnosis
+- Weighted class weighting for imbalanced LOS classes (balanced, sqrt, or custom weights)
 - Weighted BCE for mortality prediction
+
+## Features
+
+### Demographic Features
+- **Age**: Normalized age (minmax or z-score normalization)
+- **Sex**: Binary encoding (0/1) or one-hot encoding (configurable)
+
+### Diagnosis Features (ICD-10 Codes)
+- **Top 15 Diagnoses**: Most frequent ICD-10 diagnosis codes from MIMIC-IV
+  - Default diagnoses: R6521, J9690, Z66, R6520, N170, A419, E872, J690, N179, J189, J449, D696, E871, N390, D62
+  - Binary encoding: Each diagnosis is represented as 0 (absent) or 1 (present)
+  - Missing strategy: Zero-filling for missing diagnoses (configurable)
+- **Integration**: Late fusion with ECG features and demographic features
+- **Performance Impact**: Diagnosis features show significant improvements:
+  - +57.4% Balanced Accuracy improvement
+  - +67.0% Macro F1-Score improvement
+  - +32.7% Mortality prediction accuracy improvement
+  - Better per-class performance, especially for rare classes
 
 ## Datasets
 

@@ -75,19 +75,48 @@ class CNNScratch(BaseECGModel):
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         # Output: (B, 128, 1) -> (B, 128)
         
+        # Check if demographic features are enabled
+        data_config = config.get("data", {})
+        demographic_config = data_config.get("demographic_features", {})
+        self.use_demographics = demographic_config.get("enabled", False)
+        
+        # Check if diagnosis features are enabled
+        diagnosis_config = data_config.get("diagnosis_features", {})
+        self.use_diagnoses = diagnosis_config.get("enabled", False)
+        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
+        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
+        
+        # Calculate feature dimension (ECG features + optional demographic + diagnosis features)
+        feature_dim = 128  # ECG features after global pooling
+        if self.use_demographics:
+            sex_encoding = demographic_config.get("sex_encoding", "binary")
+            demo_dim = 2 if sex_encoding == "binary" else 3  # binary: [age, sex], onehot: [age, sex_0, sex_1]
+            feature_dim += demo_dim
+        if self.use_diagnoses:
+            feature_dim += diagnosis_dim
+        
         # Classification Head
         self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc1 = nn.Linear(128, 64)
+        self.fc1 = nn.Linear(feature_dim, 64)
         self.dropout2 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(64, self.num_classes)
         
         self.relu = nn.ReLU()
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Forward pass.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
+            demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
+                                 None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             logits: Output logits of shape (B, num_classes)
@@ -114,8 +143,15 @@ class CNNScratch(BaseECGModel):
         x = self.global_pool(x)  # (B, 128, 1)
         x = x.squeeze(-1)  # (B, 128)
         
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused = x
+        if self.use_demographics and demographic_features is not None:
+            fused = torch.cat([fused, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused = torch.cat([fused, diagnosis_features], dim=1)
+        
         # Classification Head
-        x = self.dropout1(x)
+        x = self.dropout1(fused)
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout2(x)
@@ -123,16 +159,24 @@ class CNNScratch(BaseECGModel):
         
         return x
     
-    def get_features(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def get_features(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Extract features before final classification head.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
-                                 This parameter is ignored for CNNScratch (not used in this model).
+                                 None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             features: Feature tensor of shape (B, 64) after fc1 and before fc2.
+                     If demographic/diagnosis features are enabled, this includes them.
         """
         # Conv Block 1
         x = self.conv1(x)
@@ -156,8 +200,15 @@ class CNNScratch(BaseECGModel):
         x = self.global_pool(x)  # (B, 128, 1)
         x = x.squeeze(-1)  # (B, 128)
         
+        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        fused = x
+        if self.use_demographics and demographic_features is not None:
+            fused = torch.cat([fused, demographic_features], dim=1)
+        if self.use_diagnoses and diagnosis_features is not None:
+            fused = torch.cat([fused, diagnosis_features], dim=1)
+        
         # Classification Head (up to fc1)
-        x = self.dropout1(x)
+        x = self.dropout1(fused)
         x = self.fc1(x)
         x = self.relu(x)
         

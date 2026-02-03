@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ecg_cpc_24h_weighted
+#SBATCH --job-name=deepecg_sl_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=10:00:00          # Extended time for two-phase training (Phase 1: 2-3h, Phase 2: 5-7h)
@@ -18,9 +18,18 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
 
-# Ensure we run from the submit directory (robust paths)
-export SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(pwd)}"
-cd "${SLURM_SUBMIT_DIR}"
+# Ensure we run from the project directory
+PROJECT_ROOT="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1"
+
+# Verify project root exists
+if [ ! -d "${PROJECT_ROOT}" ]; then
+    echo "ERROR: Project root not found at: ${PROJECT_ROOT}"
+    exit 1
+fi
+
+cd "${PROJECT_ROOT}"
+export SLURM_SUBMIT_DIR="${PROJECT_ROOT}"
+echo "Changed to project directory: ${PROJECT_ROOT}"
 
 # ============================================================================
 # ANPASSUNGEN FÜR BW UNI CLUSTER 3.0:
@@ -31,38 +40,40 @@ module load devel/python/3.12.3-gnu-14.2
 module load devel/cuda/12.8
 
 # 2. VIRTUAL ENVIRONMENT AKTIVIEREN
-source venv/bin/activate
+if [ -f "${PROJECT_ROOT}/venv/bin/activate" ]; then
+    source "${PROJECT_ROOT}/venv/bin/activate"
+    echo "Activated venv from: ${PROJECT_ROOT}/venv"
+else
+    echo "ERROR: venv not found at ${PROJECT_ROOT}/venv/bin/activate"
+    exit 1
+fi
 
-# Install s4-torch if not already installed
-echo "Checking for s4-torch..."
-python -c "import s4_torch" 2>/dev/null
+# 3. INSTALL FAIRSEQ-SIGNALS IF NEEDED
+echo "Checking for fairseq-signals..."
+python -c "import fairseq_signals" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "s4-torch not found. Installing..."
-    pip install s4-torch
+    echo "fairseq-signals not found. Installing..."
+    pip install git+https://github.com/HeartWise-AI/fairseq-signals.git
     if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to install s4-torch"
+        echo "ERROR: Failed to install fairseq-signals"
         exit 1
     fi
-    echo "s4-torch installed successfully"
+    echo "fairseq-signals installed successfully"
 else
-    echo "s4-torch already installed"
+    echo "fairseq-signals already installed"
 fi
 
-# Fix cuDNN version incompatibility: Use PyTorch's bundled cuDNN instead of module's
-# PyTorch was compiled against cuDNN 9.8.0, but module system provides 9.7.1
-# Strategy: Get PyTorch's lib directory and prepend it, then remove all cuDNN paths
+# 4. Fix cuDNN version incompatibility: Use PyTorch's bundled cuDNN instead of module's
 TORCH_LIB_DIR=$(python -c "import torch; import os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))" 2>/dev/null)
 if [ -n "$LD_LIBRARY_PATH" ]; then
-    # Remove all paths containing 'cudnn' (case-insensitive) and clean up
     export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -iv cudnn | grep -v '^$' | tr '\n' ':' | sed 's/:$//')
 fi
-# Prepend PyTorch's lib directory to ensure bundled cuDNN is found first
 if [ -n "$TORCH_LIB_DIR" ] && [ -d "$TORCH_LIB_DIR" ]; then
     export LD_LIBRARY_PATH="${TORCH_LIB_DIR}:${LD_LIBRARY_PATH}"
     echo "Using PyTorch's bundled cuDNN from: $TORCH_LIB_DIR"
 fi
 
-# 3. ENVIRONMENT VARIABLES SETZEN
+# 5. ENVIRONMENT VARIABLES SETZEN
 export ICUSTAYS_PATH="${SLURM_SUBMIT_DIR}/data/labeling/labels_csv/icustays.csv"
 if [ ! -f "${ICUSTAYS_PATH}" ]; then
   echo "ERROR: icustays.csv not found at: ${ICUSTAYS_PATH}"
@@ -72,7 +83,7 @@ fi
 # GPU-Einstellung
 export CUDA_VISIBLE_DEVICES=0
 
-# 4. PYTHON PATH SETZEN
+# PYTHON PATH SETZEN
 export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 
 # ============================================================================
@@ -80,12 +91,12 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 
 echo "============================================================"
-echo "Training ECG-CPC (S4 + CPC Pretraining) for 24h Dataset"
+echo "Training DeepECG-SL (WCR + Self-Supervised Pretraining) for 24h Dataset"
 echo "Two-Phase Training: Phase 1 (Frozen) + Phase 2 (Fine-tuning)"
 echo "============================================================"
 
 # Training starten
-python scripts/training/icu_24h/ecg_cpc/train_ecg_cpc_24h.py
+python scripts/training/icu_24h/deepecg_sl/train_deepecg_sl_24h.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -119,7 +130,7 @@ if [ -f "$LOG_FILE" ]; then
     echo ""
     echo "=== Model Checkpoints ==="
     if [ -d "outputs/checkpoints" ]; then
-        ls -lh outputs/checkpoints/ecg_cpc_*${SLURM_JOB_ID}*.pt 2>/dev/null || echo "Keine ECG-CPC Checkpoints gefunden"
+        ls -lh outputs/checkpoints/deepecg_sl_*${SLURM_JOB_ID}*.pt 2>/dev/null || echo "Keine DeepECG-SL Checkpoints gefunden"
     else
         echo "Checkpoint-Verzeichnis nicht gefunden"
     fi

@@ -17,7 +17,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
-echo "Training with Class Weights for 24h Dataset (Balanced Method)"
+echo "Training with Class Weights for 24h Dataset (Intervals, 10 Classes)"
 
 # Ensure we run from the submit directory (robust paths)
 cd "${SLURM_SUBMIT_DIR}"
@@ -105,7 +105,7 @@ echo ""
 echo "Vollständige Logs verfügbar in: $LOG_FILE"
 echo "Checkpoints verfügbar in: outputs/checkpoints/"
 echo ""
-echo "Config verwendet: configs/24h_weighted/balanced_weights.yaml (Balanced Method)"
+echo "Config verwendet: configs/icu_24h/output/weighted_intervals.yaml (Intervals, 10 Classes)"
 
 # Exit mit Training-Exit-Code
 exit $TRAINING_EXIT_CODE

@@ -1,6 +1,11 @@
 """Training script for CNN from scratch with LOS bin classification.
-This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/24h_weighted/balanced_weights.yaml (balanced method)
+This script uses class weights specifically calculated for the 24h ECG dataset
+with intervals binning strategy (10 classes) and augmentation.
+
+Base config: configs/icu_24h/output/weighted_intervals.yaml (model-agnostic)
+Model config: configs/model/cnn_scratch.yaml
+
+To adapt for other models, simply change the base_config_path to weighted_intervals.yaml.
 """
 
 from pathlib import Path
@@ -14,16 +19,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from src.models import CNNScratch
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
-from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
+from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping, get_num_classes_from_config
 from src.training import Trainer
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights."""
-    # Load configs - using 24h weighted config (balanced method)
-    base_config_path = Path("configs/icu_24h/24h_weighted/balanced_weights.yaml")
+    """Main training function for 24h dataset with class weights, intervals (10 classes), and augmentation."""
+    # Load configs - using weighted_intervals config
+    base_config_path = Path("configs/icu_24h/output/weighted_intervals.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
     config = load_config(
@@ -31,13 +36,21 @@ def main():
         model_config_path=model_config_path,
     )
     
+    # Override num_classes from los_binning to ensure model uses correct number of classes
+    num_classes = get_num_classes_from_config(config)
+    config["model"]["num_classes"] = num_classes
+    
     print("="*60)
     print("Training CNN with Class Weights for 24h Dataset")
+    print("Configuration: intervals (10 classes), with augmentation")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
+    print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
+    los_binning = config.get('data', {}).get('los_binning', {})
+    print(f"LOS binning: strategy={los_binning.get('strategy', 'unknown')}, max_days={los_binning.get('max_days', 'unknown')}")
     if 'weight' in config.get('training', {}).get('loss', {}):
         weights = config.get('training', {}).get('loss', {}).get('weight', [])
         print(f"Class weights: {weights}")
@@ -192,8 +205,12 @@ def main():
                 "Ensure SLURM_JOB_ID environment variable is set."
             )
         
-        # Get number of classes from config
-        num_classes = config.get("model", {}).get("num_classes", 10)
+        # Get number of classes from config (use los_binning if available, else model.num_classes, else default 10)
+        try:
+            num_classes = get_num_classes_from_config(config)
+        except (KeyError, ValueError):
+            # Fallback to model config or default
+            num_classes = config.get("model", {}).get("num_classes", 10)
         
         # Evaluate on test set with detailed metrics
         # Use the criterion from trainer (already has weights on correct device)

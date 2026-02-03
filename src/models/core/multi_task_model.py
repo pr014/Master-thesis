@@ -56,9 +56,22 @@ class MultiTaskECGModel(nn.Module):
             demo_dim = 2 if sex_encoding == "binary" else 3
             dummy_demographic_features = torch.zeros(1, demo_dim, device=device)
         
+        # Check if diagnosis features are enabled
+        diagnosis_config = data_config.get("diagnosis_features", {})
+        use_diagnoses = diagnosis_config.get("enabled", False)
+        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
+        diagnosis_dim = len(diagnosis_list) if use_diagnoses else 0
+        dummy_diagnosis_features = None
+        if use_diagnoses:
+            dummy_diagnosis_features = torch.zeros(1, diagnosis_dim, device=device)
+        
         with torch.no_grad():
             try:
-                features = base_model.get_features(dummy_input, demographic_features=dummy_demographic_features)
+                features = base_model.get_features(
+                    dummy_input, 
+                    demographic_features=dummy_demographic_features,
+                    diagnosis_features=dummy_diagnosis_features
+                )
                 feature_dim = features.shape[1]
             except NotImplementedError:
                 raise NotImplementedError(
@@ -116,21 +129,32 @@ class MultiTaskECGModel(nn.Module):
                 "Please implement _extract_los_head() for this model type."
             )
     
-    def forward(self, x: torch.Tensor, demographic_features: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        demographic_features: Optional[torch.Tensor] = None,
+        diagnosis_features: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
         """Forward pass through multi-task model.
         
         Args:
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
+            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
+                               None if diagnosis features are disabled.
         
         Returns:
             Dictionary with:
                 - 'los': LOS logits of shape (B, num_classes)
                 - 'mortality': Mortality probabilities of shape (B, 1) in range [0, 1]
         """
-        # Extract features using base model (includes demographic features if enabled)
-        features = self.base_model.get_features(x, demographic_features=demographic_features)  # (B, feature_dim)
+        # Extract features using base model (includes demographic and diagnosis features if enabled)
+        features = self.base_model.get_features(
+            x, 
+            demographic_features=demographic_features,
+            diagnosis_features=diagnosis_features
+        )  # (B, feature_dim)
         
         # LOS classification head
         los_logits = self.los_head(features)  # (B, num_classes)
