@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=deepecg_sl_24h_weighted
+#SBATCH --job-name=hubert_ecg_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=10:00:00          # Extended time for two-phase training (Phase 1: 2-3h, Phase 2: 4-5h, total ~6.5-8h)
@@ -48,42 +48,15 @@ else
     exit 1
 fi
 
-# 3. INSTALL FAIRSEQ-SIGNALS IF NEEDED
-echo "Checking for fairseq-signals..."
-python -c "import fairseq_signals" 2>/dev/null
+# 3. CHECK DEPENDENCIES
+echo "Checking dependencies..."
+python -c "import torch; import transformers; import biosppy; import scipy" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "fairseq-signals not found. Installing..."
-    # Fix: pip 25.3 rejects omegaconf 2.0.x due to metadata warnings, but fairseq-signals needs 2.0.x for 'II' symbol
-    # Solution: Install omegaconf 2.0.6 explicitly first, then install fairseq-signals
-    echo "Installing compatible omegaconf version (2.0.6) first..."
-    pip install "omegaconf==2.0.6" || {
-        echo "WARNING: Failed to install omegaconf 2.0.6, trying alternative approach..."
-        # Alternative: Downgrade pip temporarily to avoid metadata validation
-        pip install "pip<24.1" --quiet 2>/dev/null || true
-        pip install "omegaconf==2.0.6" || pip install "omegaconf>=2.0.0,<2.1"
-    }
-    # Now install fairseq-signals (it should use the already-installed omegaconf 2.0.6)
-    echo "Installing fairseq-signals..."
-    pip install git+https://github.com/HeartWise-AI/fairseq-signals.git
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to install fairseq-signals"
-        exit 1
-    fi
-    # Verify that omegaconf still has the II symbol
-    python -c "from omegaconf import II; print('✓ omegaconf II import successful')" || {
-        echo "ERROR: omegaconf II import failed after installation"
-        echo "Reinstalling omegaconf 2.0.6..."
-        pip install --force-reinstall --no-deps "omegaconf==2.0.6"
-    }
-    echo "fairseq-signals installed successfully"
-else
-    echo "fairseq-signals already installed"
-    # Verify omegaconf version is compatible
-    python -c "from omegaconf import II" 2>/dev/null || {
-        echo "WARNING: omegaconf II import failed. Reinstalling omegaconf 2.0.6..."
-        pip install --force-reinstall --no-deps "omegaconf==2.0.6"
-    }
+    echo "ERROR: Required dependencies not found (torch, transformers, biosppy, scipy)"
+    echo "Please install dependencies: pip install torch transformers biosppy scipy"
+    exit 1
 fi
+echo "All dependencies available"
 
 # 4. Fix cuDNN version incompatibility: Use PyTorch's bundled cuDNN instead of module's
 TORCH_LIB_DIR=$(python -c "import torch; import os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))" 2>/dev/null)
@@ -113,12 +86,12 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 
 echo "============================================================"
-echo "Training DeepECG-SL (WCR + Self-Supervised Pretraining) for 24h Dataset"
+echo "Training HuBERT-ECG (Self-Supervised Pretraining) for 24h Dataset"
 echo "Two-Phase Training: Phase 1 (Frozen) + Phase 2 (Fine-tuning)"
 echo "============================================================"
 
 # Training starten
-python scripts/training/icu_24h/deepecg_sl/train_deepecg_sl_24h.py
+python scripts/training/icu_24h/hubert_ecg/train_hubert_ecg_24h.py
 
 TRAINING_EXIT_CODE=$?
 
@@ -152,7 +125,7 @@ if [ -f "$LOG_FILE" ]; then
     echo ""
     echo "=== Model Checkpoints ==="
     if [ -d "outputs/checkpoints" ]; then
-        ls -lh outputs/checkpoints/deepecg_sl_*${SLURM_JOB_ID}*.pt 2>/dev/null || echo "Keine DeepECG-SL Checkpoints gefunden"
+        ls -lh outputs/checkpoints/hubert_ecg_*${SLURM_JOB_ID}*.pt 2>/dev/null || echo "Keine HuBERT-ECG Checkpoints gefunden"
     else
         echo "Checkpoint-Verzeichnis nicht gefunden"
     fi

@@ -1,11 +1,11 @@
-"""Training script for DeepECG-SL (WCR) with two-phase training.
+"""Training script for HuBERT-ECG with two-phase training.
 
-Phase 1: Frozen backbone (WCR encoder frozen, only heads trained)
+Phase 1: Frozen backbone (HuBERT encoder frozen, only heads trained)
 Phase 2: Fine-tuning with layer-dependent learning rates
 
 Based on Transfer Learning strategy for self-supervised pretrained models.
 
-LOS Regression Task: Predicts continuous LOS in days.
+LOS Regression Task: Predicts continuous LOS in days (not binned classes).
 """
 
 from pathlib import Path
@@ -16,7 +16,7 @@ import torch
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from src.models import DeepECG_SL
+from src.models import HuBERT_ECG
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
@@ -24,8 +24,8 @@ from src.training.losses import get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
-class DeepECG_SL_Trainer(Trainer):
-    """Specialized trainer for DeepECG-SL with two-phase training."""
+class HuBERT_ECG_Trainer(Trainer):
+    """Specialized trainer for HuBERT-ECG with two-phase training."""
     
     def __init__(
         self,
@@ -37,7 +37,7 @@ class DeepECG_SL_Trainer(Trainer):
         criterion=None,
         phase: int = 1,
     ):
-        """Initialize DeepECG-SL trainer.
+        """Initialize HuBERT-ECG trainer.
         
         Args:
             phase: Training phase (1: frozen, 2: fine-tuning)
@@ -61,8 +61,7 @@ class DeepECG_SL_Trainer(Trainer):
         print("="*60)
         print("Phase 1: Frozen Backbone Training")
         print("="*60)
-        print("WCR encoder: FROZEN (no gradient updates)")
-        print("Input adapter: FROZEN (no gradient updates)")
+        print("HuBERT encoder: FROZEN (no gradient updates)")
         print("Trainable: Only shared layers and regression/classification heads")
         print(f"Learning rate: {self.optimizer.param_groups[0]['lr']}")
         print("="*60)
@@ -77,8 +76,7 @@ class DeepECG_SL_Trainer(Trainer):
         print("="*60)
         print("Phase 2: Fine-tuning with Layer-Dependent Learning Rates")
         print("="*60)
-        print("WCR encoder: UNFROZEN (with reduced learning rate)")
-        print("Input adapter: UNFROZEN (with reduced learning rate)")
+        print("HuBERT encoder: UNFROZEN (with reduced learning rate)")
         print("Learning rates:")
         for i, group in enumerate(self.optimizer.param_groups):
             print(f"  Group {i}: lr={group['lr']:.2e}, params={len(group['params'])}")
@@ -104,13 +102,13 @@ class DeepECG_SL_Trainer(Trainer):
         base_model = self.model.base_model if hasattr(self.model, 'base_model') else self.model
         
         # Phase-specific learning rates
+        # Note: HuBERT_ECG architecture has classifier_dropout + heads (no shared_bn/shared_fc)
         if self.phase == 1:
-            # Phase 1: Only heads are trainable (WCR + Input Adapter frozen)
+            # Phase 1: Only heads are trainable (HuBERT encoder frozen)
             head_lr = base_lr  # 1e-3 typically
             param_groups = [
                 {
-                    'params': list(base_model.shared_bn.parameters()) +
-                             list(base_model.shared_fc.parameters()) +
+                    'params': list(base_model.classifier_dropout.parameters()) +
                              list(base_model.los_head.parameters()) +
                              list(base_model.mortality_head.parameters()),
                     'lr': head_lr,
@@ -118,33 +116,20 @@ class DeepECG_SL_Trainer(Trainer):
             ]
         else:  # Phase 2
             # Phase 2: Layer-dependent learning rates
-            # WCR encoder: 1e-5 (100× reduction)
-            # Input adapter: 1e-5 (100× reduction)
-            # Shared layers: 1e-4 (10× reduction)
-            # Heads: 1e-4 (10× reduction)
+            # HuBERT encoder: 1e-5 (100× reduction)
+            # Classifier dropout + Heads: 1e-4 (10× reduction)
             backbone_lr = 1e-5
             head_lr = 1e-4
             
             param_groups = [
                 {
-                    'params': base_model.wcr_encoder.parameters(),
+                    'params': base_model.hubert_encoder.parameters(),
                     'lr': backbone_lr,
                 },
                 {
-                    'params': base_model.input_adapter.parameters(),
-                    'lr': backbone_lr,
-                },
-                {
-                    'params': list(base_model.shared_bn.parameters()) +
-                             list(base_model.shared_fc.parameters()),
-                    'lr': head_lr,
-                },
-                {
-                    'params': base_model.los_head.parameters(),
-                    'lr': head_lr,
-                },
-                {
-                    'params': base_model.mortality_head.parameters(),
+                    'params': list(base_model.classifier_dropout.parameters()) +
+                             list(base_model.los_head.parameters()) +
+                             list(base_model.mortality_head.parameters()),
                     'lr': head_lr,
                 },
             ]
@@ -224,7 +209,7 @@ def main():
     """
     # Load configs
     base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
-    model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
+    model_config_path = Path("configs/model/hubert_ecg/hubert_ecg.yaml")
     
     # Load demographic features config (Age + Sex only, NO diagnoses)
     feature_config_path = Path("configs/features/demographic_features.yaml")
@@ -239,7 +224,7 @@ def main():
     )
     
     print("="*60)
-    print("Training DeepECG-SL (WCR + Self-Supervised Pretraining) for 24h Dataset")
+    print("Training HuBERT-ECG (Self-Supervised Pretraining) for 24h Dataset")
     print("Task: LOS REGRESSION (continuous prediction in days)")
     print("Configuration: Age + Sex only (NO diagnoses)")
     print("="*60)
@@ -249,15 +234,15 @@ def main():
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     
     model_config = config.get('model', {})
-    wcr_config = model_config.get('wcr', {})
-    print(f"WCR Model: {wcr_config.get('model_name', 'wcr_77_classes')}")
-    print(f"WCR d_model: {wcr_config.get('d_model', 512)}")
+    hubert_config = model_config.get('hubert', {})
+    print(f"HuBERT hidden_size: {hubert_config.get('hidden_size', 768)}")
     
     pretrained_config = model_config.get('pretrained', {})
     if pretrained_config.get('enabled', False):
-        cache_dir = pretrained_config.get('cache_dir', 'data/pretrained_weights/deepecg_sl')
+        cache_dir = pretrained_config.get('cache_dir', 'data/pretrained_weights/hubert_ecg')
+        checkpoint_path = hubert_config.get('checkpoint_path', 'checkpoint.pt')
         print(f"Pretrained weights: Enabled (cache: {cache_dir})")
-        print("  Weights will be downloaded automatically from HuggingFace if not cached")
+        print(f"Checkpoint path: {checkpoint_path}")
     else:
         print("Pretrained weights: Disabled (training from scratch)")
     
@@ -278,11 +263,11 @@ def main():
     # Load ICU stays and create mapper
     icu_mapper = setup_icustays_mapper(config)
     
-    # Multi-task is required for DeepECG-SL
+    # Multi-task is required for HuBERT-ECG
     multi_task_config = config.get("multi_task", {})
     is_multi_task = multi_task_config.get("enabled", False)
     if not is_multi_task:
-        print("Warning: Multi-task is disabled. DeepECG-SL requires multi-task learning.")
+        print("Warning: Multi-task is disabled. HuBERT-ECG requires multi-task learning.")
         print("Enabling multi-task in config...")
         config["multi_task"] = {"enabled": True}
         is_multi_task = True
@@ -297,67 +282,16 @@ def main():
         mortality_labels=None,
     )
     
-    # Create base model (will automatically download weights if needed)
-    print("\nCreating DeepECG-SL model...")
-    print("This may take a while on first run (downloading pretrained weights)...")
-    base_model = DeepECG_SL(config)
+    # Create base model (will load weights if checkpoint_path is provided)
+    print("\nCreating HuBERT-ECG model...")
+    print("This may take a while on first run (loading pretrained weights)...")
+    base_model = HuBERT_ECG(config)
     print(f"Model created with {base_model.count_parameters():,} parameters")
     
     # Wrap in MultiTaskECGModel for multi-task compatibility
     print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
     model = MultiTaskECGModel(base_model, config)
     print(f"Multi-Task model created with {model.count_parameters():,} parameters")
-    
-    # ========== DEBUG: Detailed Parameter Analysis ==========
-    print("\n" + "="*60)
-    print("DEBUG: Detailed Parameter Analysis")
-    print("="*60)
-    
-    # Count parameters per component
-    def count_component_params(component, name):
-        total = sum(p.numel() for p in component.parameters() if p.requires_grad)
-        frozen = sum(p.numel() for p in component.parameters() if not p.requires_grad)
-        return total, frozen
-    
-    # Base model components
-    wcr_trainable, wcr_frozen = count_component_params(base_model.wcr_encoder, "WCR Encoder")
-    adapter_trainable, adapter_frozen = count_component_params(base_model.input_adapter, "Input Adapter")
-    shared_trainable, shared_frozen = count_component_params(base_model.shared_bn, "Shared BN")
-    shared_trainable += sum(p.numel() for p in base_model.shared_fc.parameters() if p.requires_grad)
-    shared_trainable += sum(p.numel() for p in base_model.shared_dropout1.parameters() if p.requires_grad)
-    shared_trainable += sum(p.numel() for p in base_model.shared_dropout2.parameters() if p.requires_grad)
-    los_trainable, _ = count_component_params(base_model.los_head, "LOS Head")
-    mortality_trainable, _ = count_component_params(base_model.mortality_head, "Mortality Head")
-    
-    print(f"WCR Encoder:        {wcr_trainable:>15,} trainable, {wcr_frozen:>15,} frozen")
-    print(f"Input Adapter:      {adapter_trainable:>15,} trainable, {adapter_frozen:>15,} frozen")
-    print(f"Shared Layers:      {shared_trainable:>15,} trainable")
-    print(f"LOS Head:           {los_trainable:>15,} trainable (output: 1 = continuous)")
-    print(f"Mortality Head:     {mortality_trainable:>15,} trainable (output: 1 = binary)")
-    print(f"{'─'*60}")
-    total_trainable = wcr_trainable + adapter_trainable + shared_trainable + los_trainable + mortality_trainable
-    total_frozen = wcr_frozen + adapter_frozen
-    print(f"TOTAL:              {total_trainable:>15,} trainable, {total_frozen:>15,} frozen")
-    print(f"Expected (85M+):    {85_000_000:>15,} trainable")
-    
-    # Verify feature_dim from config
-    feature_dim = config.get("model", {}).get("feature_dim", 768)
-    print(f"\nFeature dimension (from config): {feature_dim}")
-    print(f"Expected: 768 (WCR encoder output)")
-    
-    # Check if encoder parameters are trainable
-    encoder_trainable_count = sum(1 for p in base_model.wcr_encoder.parameters() if p.requires_grad)
-    encoder_total_count = sum(1 for p in base_model.wcr_encoder.parameters())
-    print(f"\nWCR Encoder parameter check:")
-    print(f"  Trainable parameter tensors: {encoder_trainable_count}/{encoder_total_count}")
-    if encoder_trainable_count == 0:
-        print("  ⚠️  WARNING: No encoder parameters are trainable!")
-    elif encoder_trainable_count < encoder_total_count:
-        print(f"  ⚠️  WARNING: Only {encoder_trainable_count}/{encoder_total_count} parameter groups are trainable")
-    else:
-        print(f"  ✓ All encoder parameters are trainable")
-    
-    print("="*60 + "\n")
     
     # Create multi-task loss (MSE for LOS regression, BCE for mortality)
     criterion = get_multi_task_loss(config)
@@ -368,26 +302,68 @@ def main():
     if job_id:
         print(f"SLURM Job ID: {job_id}")
     
-    # ========== PHASE 1 SKIPPED: Direct Fine-tuning with Unfrozen Encoder ==========
+    # ========== PHASE 1: Frozen Backbone ==========
     print("\n" + "="*60)
-    print("DIRECT FINE-TUNING (Phase 1 skipped - Encoder starts unfrozen)")
-    print("="*60)
-    print("WCR encoder: UNFROZEN from start")
-    print("Input adapter: UNFROZEN from start")
-    print("All layers trainable with layer-dependent learning rates")
+    print("PHASE 1: FROZEN BACKBONE TRAINING")
     print("="*60)
     
-    checkpoint_dir = Path(config.get("checkpoint", {}).get("save_dir", "outputs/checkpoints"))
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
-    # ========== PHASE 2: Fine-tuning (starting directly) ==========
-    trainer_phase2 = DeepECG_SL_Trainer(
+    trainer_phase1 = HuBERT_ECG_Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
         criterion=criterion,
-        phase=2,  # Start directly with Phase 2 (unfrozen encoder)
+        phase=1,
+    )
+    
+    trainer_phase1.config_paths = {
+        "base": str(base_config_path.resolve()),
+        "model": str(model_config_path.resolve()),
+    }
+    trainer_phase1.job_id = job_id
+    
+    # Train Phase 1
+    history_phase1 = trainer_phase1.train_phase1(max_epochs=20, patience=20)
+    
+    print("\nPhase 1 completed!")
+    print(f"Best validation loss: {min(history_phase1.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE: {min(history_phase1.get('val_los_mae', [float('inf')])):.4f} days")
+    
+    # Save Phase 1 checkpoint
+    checkpoint_dir = Path(config.get("checkpoint", {}).get("save_dir", "outputs/checkpoints"))
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    phase1_checkpoint_path = checkpoint_dir / f"hubert_ecg_phase1_best_{job_id if job_id else 'local'}.pt"
+    
+    if hasattr(trainer_phase1.checkpoint, 'best_model_state'):
+        torch.save({
+            'model_state_dict': trainer_phase1.checkpoint.best_model_state,
+            'epoch': trainer_phase1.checkpoint.best_epoch,
+            'val_loss': trainer_phase1.checkpoint.best_score,
+            'history': history_phase1,
+            'config': config,
+        }, phase1_checkpoint_path)
+        print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
+    else:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'epoch': trainer_phase1.current_epoch,
+            'history': history_phase1,
+            'config': config,
+        }, phase1_checkpoint_path)
+        print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
+    
+    # ========== PHASE 2: Fine-tuning ==========
+    print("\n" + "="*60)
+    print("PHASE 2: FINE-TUNING WITH LAYER-DEPENDENT LEARNING RATES")
+    print("="*60)
+    
+    trainer_phase2 = HuBERT_ECG_Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        config=config,
+        criterion=criterion,
+        phase=2,
     )
     
     trainer_phase2.config_paths = {
@@ -396,9 +372,9 @@ def main():
     }
     trainer_phase2.job_id = job_id
     
-    # Train Phase 2 (no Phase 1 checkpoint - start fresh with unfrozen encoder)
+    # Train Phase 2 (load Phase 1 checkpoint)
     history_phase2 = trainer_phase2.train_phase2(
-        phase1_checkpoint_path=None,  # No Phase 1 checkpoint
+        phase1_checkpoint_path=phase1_checkpoint_path,
         max_epochs=30,
         patience=15,
     )
@@ -408,7 +384,7 @@ def main():
     print(f"Best validation MAE: {min(history_phase2.get('val_los_mae', [float('inf')])):.4f} days")
     
     # Save Phase 2 checkpoint
-    phase2_checkpoint_path = checkpoint_dir / f"deepecg_sl_phase2_best_{job_id if job_id else 'local'}.pt"
+    phase2_checkpoint_path = checkpoint_dir / f"hubert_ecg_phase2_best_{job_id if job_id else 'local'}.pt"
     
     if hasattr(trainer_phase2.checkpoint, 'best_model_state'):
         torch.save({
@@ -454,8 +430,9 @@ def main():
     history_final = evaluate_and_print_results(eval_trainer, test_loader, history_phase2, config)
     
     print("\n" + "="*60)
-    print("DIRECT FINE-TUNING COMPLETED")
+    print("TWO-PHASE TRAINING COMPLETED")
     print("="*60)
+    print(f"Phase 1 checkpoint: {phase1_checkpoint_path}")
     print(f"Phase 2 checkpoint: {phase2_checkpoint_path}")
     
     return history_phase2

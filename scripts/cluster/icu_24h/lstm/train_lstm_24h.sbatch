@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lstm_24h_exact_days
+#SBATCH --job-name=lstm_uni_24h_reg
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=03:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
@@ -17,7 +17,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
-echo "Training LSTM1D Unidirectional with Class Weights for 24h Dataset (Exact Days, 8 Classes)"
+echo "Training LSTM1D Unidirectional for 24h Dataset - LOS REGRESSION (with augmentation)"
 
 # Ensure we run from the project directory
 # Use absolute path to project root (hardcoded for reliability)
@@ -121,12 +121,12 @@ export CUDA_VISIBLE_DEVICES=0
 export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 
 # ============================================================================
-# TRAINING STARTEN (24h Dataset with Class Weights, Exact Days)
+# TRAINING STARTEN (24h Dataset - LOS REGRESSION with Augmentation)
 # ============================================================================
 
-# Training starten mit weighted_exact_days config
-# Das Script verwendet automatisch configs/icu_24h/output/weighted_exact_days.yaml
-# (exact_days, 8 Klassen, balanced weights, augmentation)
+# Training starten mit baseline_with_aug config
+# Das Script verwendet automatisch configs/icu_24h/baseline_with_aug.yaml
+# (LOS Regression, mit Augmentation, ohne demographic/diagnosis features)
 python scripts/training/icu_24h/lstm/train_lstm_24h.py
 
 TRAINING_EXIT_CODE=$?
@@ -175,8 +175,8 @@ echo ""
 echo "Vollständige Logs verfügbar in: $LOG_FILE"
 echo "Checkpoints verfügbar in: outputs/checkpoints/"
 echo ""
-echo "Config verwendet: configs/icu_24h/output/weighted_exact_days.yaml"
-echo "Output-Klassen: exact_days (8 Klassen, max_days=7)"
+echo "Config verwendet: configs/icu_24h/baseline_with_aug.yaml"
+echo "Task: LOS REGRESSION (continuous prediction in days)"
 
 # Exit mit Training-Exit-Code
 exit $TRAINING_EXIT_CODE

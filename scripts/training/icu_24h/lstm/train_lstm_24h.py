@@ -1,9 +1,7 @@
-"""Training script for LSTM1D Unidirectional with LOS bin classification.
-This script uses class weights specifically calculated for the 24h ECG dataset.
-Supports flexible output classes via los_binning strategy in base config.
+"""Training script for LSTM1D Unidirectional with LOS regression.
 
-Default config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
-Can be changed by modifying base_config_path below.
+LOS Regression Task: Predicts continuous LOS in days (not binned classes).
+Uses data augmentation but no demographic/diagnosis features.
 """
 
 from pathlib import Path
@@ -14,81 +12,55 @@ import torch
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from src.models import LSTM1D
+from src.models.lstm import LSTM1D_Unidirectional
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
-from src.data.labeling import get_num_classes_from_config
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights.
+    """Main training function for 24h dataset.
     
-    Supports flexible output classes via los_binning strategy in base config.
-    The number of output classes is automatically determined from los_binning settings.
+    LOS Regression Task: Predicts continuous LOS in days.
     """
-    # Load configs - can be changed to use different base configs
-    # Default: exact_days (8 classes) with balanced weights
-    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
-    # Alternative configs:
-    # - Path("configs/icu_24h/output/weighted_intervals.yaml")  # 10 classes (intervals)
-    # - Path("configs/icu_24h/24h_weighted/sqrt_weights.yaml")  # 10 classes (sqrt weights)
-    
+    # Load configs
+    # Use baseline_with_aug.yaml for regression with data augmentation (no demographic/diagnosis features)
+    base_config_path = Path("configs/icu_24h/baseline_with_aug.yaml")
     model_config_path = Path("configs/model/lstm/unidirectional/lstm_1layer.yaml")  # Can be changed to lstm_2layer.yaml
-    
-    # Optional: Load demographic features config
-    # Set to None to disable demographic features
-    feature_config_path = Path("configs/features/demographic_features.yaml")
-    if not feature_config_path.exists():
-        feature_config_path = None
-        print("Note: Demographic features config not found. Training without Age & Sex features.")
     
     config = load_config(
         base_config_path=base_config_path,
         model_config_path=model_config_path,
-        experiment_config_path=feature_config_path,  # Optional feature config
     )
     
-    # Override num_classes from los_binning to ensure model uses correct number of classes
-    # This makes the script flexible for different los_binning strategies
-    num_classes = get_num_classes_from_config(config)
-    config["model"]["num_classes"] = num_classes
-    
     print("="*60)
-    print("Training LSTM1D Unidirectional with Class Weights for 24h Dataset")
+    print("Training LSTM1D Unidirectional for 24h Dataset")
+    print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
-    print(f"Number of classes: {num_classes}")
-    los_binning = config.get('data', {}).get('los_binning', {})
-    print(f"LOS binning: strategy={los_binning.get('strategy', 'unknown')}, max_days={los_binning.get('max_days', 'N/A')}")
-    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
-    print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
-    if 'weight' in config.get('training', {}).get('loss', {}):
-        weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights: {weights}")
+    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
+    
     model_config = config.get('model', {})
     print(f"LSTM hidden_dim: {model_config.get('hidden_dim', 'N/A')}")
     print(f"LSTM num_layers: {model_config.get('num_layers', 'N/A')}")
     print(f"LSTM pooling: {model_config.get('pooling', 'N/A')}")
     print(f"LSTM bidirectional: {model_config.get('bidirectional', 'N/A')}")
+    
+    augmentation_config = config.get('data', {}).get('augmentation', {})
+    print(f"Augmentation: {augmentation_config.get('enabled', False)}")
+    if augmentation_config.get('enabled', False):
+        print(f"  Gaussian noise: {augmentation_config.get('gaussian_noise', False)}")
+        print(f"  Amplitude scaling: {augmentation_config.get('amplitude_scaling', False)}")
+    
     demographic_config = config.get('data', {}).get('demographic_features', {})
-    if demographic_config.get('enabled', False):
-        print(f"Demographic features: Enabled (Age & Sex)")
-        print(f"  Age normalization: {demographic_config.get('age_normalization', 'N/A')}")
-        print(f"  Sex encoding: {demographic_config.get('sex_encoding', 'N/A')}")
-    else:
-        print(f"Demographic features: Disabled")
+    print(f"Demographic features: {demographic_config.get('enabled', False)}")
     
     diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
-    if diagnosis_config.get('enabled', False):
-        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
-        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
-    else:
-        print(f"Diagnosis features: Disabled")
+    print(f"Diagnosis features: {diagnosis_config.get('enabled', False)}")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -109,12 +81,12 @@ def main():
     )
     
     # Create base model
-    base_model = LSTM1D(config)
+    base_model = LSTM1D_Unidirectional(config)
     print(f"Model created with {base_model.count_parameters():,} parameters")
     
     # Wrap in MultiTaskECGModel if multi-task is enabled
     if is_multi_task:
-        print("Creating Multi-Task model (LOS + Mortality)...")
+        print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
         model = MultiTaskECGModel(base_model, config)
         print(f"Multi-Task model created with {model.count_parameters():,} parameters")
     else:
@@ -123,10 +95,10 @@ def main():
     # Create loss function
     if is_multi_task:
         criterion = get_multi_task_loss(config)
-        print("Using Multi-Task Loss (LOS + Mortality)")
+        print("Using Multi-Task Loss (LOS MSE + Mortality BCE)")
     else:
         criterion = get_loss(config)
-        print("Using Single-Task Loss (LOS only)")
+        print(f"Using Single-Task Loss (LOS MSE: {type(criterion).__name__})")
     
     # Create trainer
     trainer = Trainer(
@@ -153,8 +125,10 @@ def main():
     
     print("Training completed!")
     print(f"Best validation loss: {min(history.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE: {min(history.get('val_los_mae', [float('inf')])):.4f} days")
+    print(f"Best validation R²: {max(history.get('val_los_r2', [float('-inf')])):.4f}")
     
-    # Test evaluation (if test_loader is available)
+    # Test evaluation
     history = evaluate_and_print_results(trainer, test_loader, history, config)
     
     return history
@@ -162,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

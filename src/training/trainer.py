@@ -92,9 +92,13 @@ class Trainer:
         self.current_epoch = 0
         self.history = {
             "train_loss": [],
-            "train_los_acc": [],
+            "train_los_mae": [],
+            "train_los_rmse": [],
+            "train_los_r2": [],
             "val_loss": [],
-            "val_los_acc": [],
+            "val_los_mae": [],
+            "val_los_rmse": [],
+            "val_los_r2": [],
             # Optional multi-task metrics (will be populated if present)
             "train_mortality_acc": [],
             "val_mortality_acc": [],
@@ -235,13 +239,23 @@ class Trainer:
                 log_msg = (
                     f"Epoch {epoch}/{num_epochs} - "
                     f"Train Loss: {train_metrics.get('train_loss', 0.0):.4f}, "
-                    f"Train LOS Acc: {train_metrics.get('train_los_acc', 0.0):.4f}, "
-                    f"Val Loss: {val_metrics.get('val_loss', 0.0):.4f}, "
-                    f"Val LOS Acc: {val_metrics.get('val_los_acc', 0.0):.4f}"
+                    f"Train LOS MAE: {train_metrics.get('train_los_mae', 0.0):.4f}, "
+                    f"Train LOS RMSE: {train_metrics.get('train_los_rmse', 0.0):.4f}, "
+                    f"Train LOS R²: {train_metrics.get('train_los_r2', 0.0):.4f}"
                 )
                 self.logger.info(log_msg)
                 # Also print to stdout (captured by SLURM) for parsing
                 print(log_msg)
+                
+                # Validation metrics log
+                val_log_msg = (
+                    f"           Val Loss: {val_metrics.get('val_loss', 0.0):.4f}, "
+                    f"Val LOS MAE: {val_metrics.get('val_los_mae', 0.0):.4f}, "
+                    f"Val LOS RMSE: {val_metrics.get('val_los_rmse', 0.0):.4f}, "
+                    f"Val LOS R²: {val_metrics.get('val_los_r2', 0.0):.4f}"
+                )
+                self.logger.info(val_log_msg)
+                print(val_log_msg)
 
                 # Extra logging if mortality metrics are available
                 if "val_mortality_acc" in val_metrics or "val_mortality_auc" in val_metrics:

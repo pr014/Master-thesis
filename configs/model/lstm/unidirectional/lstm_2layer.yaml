@@ -1,20 +1,23 @@
 # LSTM1D Unidirectional model-specific configuration (2-Layer)
 # Merges with baseline.yaml
 # Only LSTM1D-specific overrides go here
+# Alternative config for 2-layer LSTM (can be used for experiments)
 
 model:
   type: "LSTM1D"  # Alias for LSTM1D_Unidirectional
   num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+                  # Note: For regression, this is ignored (output_dim = 1)
   
   # LSTM-specific architecture parameters
-  # Architecture: 2-Layer Unidirectional LSTM for ECG time series classification
+  # Architecture: 2-Layer Unidirectional LSTM for ECG time series classification/regression
   # Layer 1: 128, Layer 2: 128 (equal-size stacked LSTM)
   # ~205K params (LSTM core) + head (depends on demographics)
   
   hidden_dim: 128  # Hidden dimension for Layer 1
   hidden_dim_layer2: 128  # Hidden dimension for Layer 2
   num_layers: 2  # Number of LSTM layers
-  dropout: 0.3  # Dropout between LSTM layers
+  lstm_dropout: 0.2  # Dropout between LSTM layers (applied manually)
   bidirectional: false  # Unidirectional LSTM
-  pooling: "last"  # Pooling strategy: "last", "mean", or "max"
-  use_embedding: false  # Whether to use embedding layer (12 → hidden_dim)
+  pooling: "mean"  # Pooling strategy: "last", "mean", or "max" (mean recommended)
+  use_embedding: true  # Whether to use embedding layer (recommended)
+  embedding_dim: 64  # Embedding dimension

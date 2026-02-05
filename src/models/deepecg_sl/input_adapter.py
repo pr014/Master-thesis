@@ -40,7 +40,13 @@ class InputAdapter(nn.Module):
         if adapter_type == "conv1d":
             # Conv1D with stride=2: 5000 -> 2500
             # Input: (B, 12, 5000) -> Output: (B, 12, 2500)
-            padding = (kernel_size - stride) // 2 if stride > 1 else kernel_size // 2
+            # Formula: out_size = floor((in_size + 2*padding - kernel_size) / stride) + 1
+            # For in=5000, out=2500, kernel=3, stride=2:
+            # 2500 = floor((5000 + 2*padding - 3) / 2) + 1
+            # 2499 = floor((4997 + 2*padding) / 2)
+            # Need padding=1 to get exactly 2500:
+            # 2500 = floor((5000 + 2 - 3) / 2) + 1 = floor(4999/2) + 1 = 2499 + 1 = 2500 ✓
+            padding = 1  # Fixed padding for exact 5000->2500 conversion
             self.adapter = nn.Conv1d(
                 in_channels=12,
                 out_channels=12,

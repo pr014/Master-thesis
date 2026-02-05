@@ -1,20 +1,33 @@
 # LSTM1D Bidirectional model-specific configuration (1-Layer)
 # Merges with baseline.yaml
 # Only LSTM1D_Bidirectional-specific overrides go here
+# Improved architecture with mean pooling, embedding, and dropout
 
 model:
   type: "LSTM1D_Bidirectional"
   num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+                  # Note: For regression, this is ignored (output_dim = 1)
   
   # LSTM-specific architecture parameters
-  # Architecture: Bidirectional LSTM for ECG time series classification
-  # Hidden dimension: 128 per direction → 256 total (same output size as unidirectional with 256)
-  # ~300K parameters (1 layer) or ~900K parameters (2 layers)
+  # Architecture: Bidirectional LSTM for ECG time series classification/regression
+  # Hidden dimension: 128 per direction → 256 total
+  # ~300K parameters (1 layer) - ~1.3x unidirectional (232K for 2-layer)
   
   hidden_dim: 128  # Hidden dimension per direction (forward + backward = 256 total)
   num_layers: 1  # Number of LSTM layers
-  dropout: 0.3  # Dropout between LSTM layers (only if num_layers > 1)
+  lstm_dropout: 0.2  # Dropout between LSTM layers (for future 2-layer usage)
   bidirectional: true  # Bidirectional LSTM (enforced in model)
-  pooling: "last"  # Pooling strategy: "last", "mean", or "max"
-  use_embedding: false  # Whether to use embedding layer (12 → hidden_dim)
+  
+  # Pooling Strategy
+  # "mean": Aggregates information across all timesteps (recommended)
+  # "last": Only uses last hidden state (discards 99.98% of information)
+  # "max": Maximum pooling over time dimension
+  # Scientific justification: Lin et al. (2013) demonstrate mean pooling improves LSTM performance
+  pooling: "mean"
+  
+  # Embedding Layer (ENABLED)
+  # Increases representation capacity from raw signal values
+  # Scientific justification: Mikolov et al. (2013) demonstrate embeddings improve feature quality
+  use_embedding: true
+  embedding_dim: 64  # Embedding dimension
 

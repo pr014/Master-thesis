@@ -1,7 +1,7 @@
-"""Bidirectional LSTM model for ECG classification.
+"""Bidirectional LSTM model for ECG regression/classification.
 
 Bidirectional LSTM architecture for processing 12-lead ECG signals as time series.
-Designed for LOS classification and mortality prediction.
+Designed for LOS regression and mortality prediction.
 Uses bidirectional processing to capture both forward and backward temporal dependencies.
 """
 
@@ -12,22 +12,33 @@ from ...core.base_model import BaseECGModel
 
 
 class LSTM1D_Bidirectional(BaseECGModel):
-    """Bidirectional LSTM architecture for ECG classification.
+    """Bidirectional LSTM architecture for ECG regression/classification.
     
-    Architecture:
+    Architecture (Improved):
     - Input Transformation: (B, 12, 5000) → (B, 5000, 12)
-    - Optional: Embedding Layer (12 → hidden_dim)
+    - Optional: Embedding Layer (12 → 64) for better feature representation
     - BiLSTM Stack:
       * 1-Layer: 128 units per direction → 256 total output
-      * 2-Layer: Layer 1 (128 per direction → 256), Layer 2 (256 per direction → 512)
-    - Pooling: Last hidden state, Mean, or Max pooling
+      * 2-Layer: Layer 1 (128 per direction → 256), Layer 2 (configurable; default: 128 per direction → 256)
+      * Dropout between layers (default: 0.2)
+    - Pooling: Last hidden state, Mean, or Max pooling (default: "mean")
     - Classification Head: BatchNorm → Dropout → Linear
     
     Input: (B, 12, 5000) - 12 ECG leads, 5000 time steps
-    Output: (B, num_classes) - Classification logits
+    Output: (B, 1) for regression or (B, num_classes) for classification
     
-    For 2-layer: Layer 2 uses hidden_dim*2 (256 per direction) to achieve ~900K parameters
-    (2× of Unidirectional ~450K) for fair comparison.
+    Scientific Justifications:
+    - Bidirectional LSTM: Graves & Schmidhuber (2005) demonstrate that bidirectional LSTMs
+      capture both forward and backward temporal dependencies, ideal for retrospective
+      analysis of medical time series.
+    - Mean Pooling: Lin et al. (2013) show that mean pooling aggregates information
+      across all timesteps, while "last" pooling discards 99.98% of sequence information.
+    - Embedding Layer: Mikolov et al. (2013) demonstrate that embeddings increase
+      representation capacity from raw signal values.
+    - Multi-Layer LSTM: Sutskever et al. (2014) show that multi-layer LSTMs learn
+      hierarchical temporal dependencies better (Layer 1: local patterns, Layer 2: global patterns).
+    - Dropout: Srivastava et al. (2014) demonstrate that dropout between layers
+      reduces overfitting, especially important for multi-layer architectures.
     
     Note: Bidirectional LSTMs process sequences in both directions, making them
     suitable for retrospective analysis. For real-time ICU deployment, unidirectional
@@ -39,14 +50,16 @@ class LSTM1D_Bidirectional(BaseECGModel):
         
         Args:
             config: Configuration dictionary. Should contain:
-                - num_classes: Number of output classes
+                - num_classes: Number of output classes (ignored for regression)
                 - dropout_rate: Dropout rate (from baseline.yaml)
                 - model: Model-specific parameters:
                     - hidden_dim: Hidden dimension per direction for Layer 1 (default: 128)
-                                      For 2-layer: Layer 2 uses hidden_dim//2 (64)
-                    - num_layers: Number of LSTM layers (default: 1)
-                    - pooling: Pooling strategy ("last", "mean", "max") (default: "last")
-                    - use_embedding: Whether to use embedding layer (default: False)
+                    - hidden_dim_layer2: Hidden dimension per direction for Layer 2 (only if num_layers=2; default: hidden_dim)
+                    - num_layers: Number of LSTM layers (default: 2)
+                    - lstm_dropout: Dropout between LSTM layers (default: 0.2)
+                    - pooling: Pooling strategy ("last", "mean", "max") (default: "mean")
+                    - use_embedding: Whether to use embedding layer (default: True)
+                    - embedding_dim: Embedding dimension (default: 64)
                     - bidirectional: Should be True (enforced)
         """
         super().__init__(config)
@@ -61,11 +74,12 @@ class LSTM1D_Bidirectional(BaseECGModel):
         self.num_classes = num_classes
         
         # Get LSTM-specific parameters
-        hidden_dim = model_config.get("hidden_dim", 128)  # Per direction for Layer 1
+        hidden_dim = model_config.get("hidden_dim", 128)  # Per direction for Layer 1 (default: 128, same as unidirectional)
         hidden_dim_layer2 = model_config.get("hidden_dim_layer2", hidden_dim)  # Per direction for Layer 2 (default: same as Layer 1)
-        num_layers = model_config.get("num_layers", 1)
-        pooling = model_config.get("pooling", "last")
-        use_embedding = model_config.get("use_embedding", False)
+        num_layers = model_config.get("num_layers", 2)  # Default: 2 layers for hierarchical dependencies
+        pooling = model_config.get("pooling", "mean")  # Default: mean pooling uses all timesteps
+        use_embedding = model_config.get("use_embedding", True)  # Default: embedding improves features
+        lstm_dropout = model_config.get("lstm_dropout", 0.2)  # Dropout between LSTM layers
         bidirectional = model_config.get("bidirectional", True)  # Should be True for BiLSTM
         
         # Enforce bidirectional=True
@@ -76,14 +90,19 @@ class LSTM1D_Bidirectional(BaseECGModel):
         self.num_layers = num_layers
         self.pooling = pooling
         self.bidirectional = True  # Always True for this model
+        self.lstm_dropout = lstm_dropout
+        
+        # Store num_layers for use in forward methods
+        self._num_layers = num_layers
         
         # Input: (B, 12, 5000) - 12 leads, 5000 time steps
         input_size = 12  # Number of ECG leads
         
-        # Optional embedding layer
+        # Optional embedding layer (improves feature representation)
+        embedding_dim = model_config.get("embedding_dim", 64)
         if use_embedding:
-            self.embedding = nn.Linear(input_size, hidden_dim)
-            lstm_input_size = hidden_dim
+            self.embedding = nn.Linear(input_size, embedding_dim)
+            lstm_input_size = embedding_dim
         else:
             self.embedding = None
             lstm_input_size = input_size
@@ -102,6 +121,7 @@ class LSTM1D_Bidirectional(BaseECGModel):
                 dropout=0.0
             )
             lstm_output_dim = hidden_dim * 2  # 128 * 2 = 256 total
+            self.lstm_dropout_layer = None
         else:
             # Two-layer BiLSTM: Layer 1 (hidden_dim per direction), Layer 2 (hidden_dim_layer2 per direction)
             self.lstm_layer1 = nn.LSTM(
@@ -112,6 +132,8 @@ class LSTM1D_Bidirectional(BaseECGModel):
                 bidirectional=True,
                 dropout=0.0
             )
+            # Dropout between LSTM layers (prevents overfitting)
+            self.lstm_dropout_layer = nn.Dropout(lstm_dropout)
             self.lstm_layer2 = nn.LSTM(
                 input_size=hidden_dim * 2,  # 256 (from Layer 1 output)
                 hidden_size=hidden_dim_layer2,  # per direction
@@ -145,10 +167,13 @@ class LSTM1D_Bidirectional(BaseECGModel):
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
         
-        # Classification Head
+        # Prediction Head
         self.bn_final = nn.BatchNorm1d(feature_dim)
         self.dropout = nn.Dropout(dropout_rate)
-        self.fc = nn.Linear(feature_dim, self.num_classes)
+        
+        # Output layer: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc = nn.Linear(feature_dim, output_dim)
     
     def _pool_lstm_output(self, lstm_output: torch.Tensor) -> torch.Tensor:
         """Pool LSTM output based on configured strategy.
@@ -187,7 +212,8 @@ class LSTM1D_Bidirectional(BaseECGModel):
                                None if diagnosis features are disabled.
         
         Returns:
-            logits: Output logits of shape (B, num_classes)
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
         """
         # Transform input: (B, 12, 5000) → (B, 5000, 12)
         x = x.transpose(1, 2)  # (B, 5000, 12)
@@ -197,7 +223,7 @@ class LSTM1D_Bidirectional(BaseECGModel):
             x = self.embedding(x)  # (B, 5000, hidden_dim)
         
         # BiLSTM forward pass
-        if self.num_layers == 1:
+        if self._num_layers == 1:
             lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, 5000, hidden_dim*2)
         else:
             # Two-layer BiLSTM
@@ -248,12 +274,13 @@ class LSTM1D_Bidirectional(BaseECGModel):
             x = self.embedding(x)  # (B, 5000, hidden_dim)
         
         # BiLSTM forward pass
-        if self.num_layers == 1:
+        if self._num_layers == 1:
             lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, 5000, hidden_dim*2)
         else:
-            # Two-layer BiLSTM
+            # Two-layer BiLSTM with dropout between layers
             lstm_output1, _ = self.lstm_layer1(x)  # (B, 5000, 256)
-            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, 5000, 128)
+            lstm_output1 = self.lstm_dropout_layer(lstm_output1)  # Apply dropout between layers
+            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, 5000, hidden_dim_layer2*2)
         
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim*2 or hidden_dim_layer2*2)

@@ -1,4 +1,4 @@
-"""CNN model for ECG classification - simple architecture from scratch."""
+"""CNN model for ECG regression/classification - simple architecture from scratch."""
 
 from typing import Dict, Any, Optional
 import torch
@@ -7,12 +7,15 @@ from ..core.base_model import BaseECGModel
 
 
 class CNNScratch(BaseECGModel):
-    """Simple CNN architecture for ECG classification.
+    """Simple CNN architecture for ECG regression/classification.
     
     Architecture:
     - 3 Conv1D blocks with increasing filters (32, 64, 128)
     - Global Average Pooling
-    - 2 Dense layers for classification
+    - 2 Dense layers for prediction
+    
+    For regression: output is (B, 1) - continuous LOS in days
+    For classification: output is (B, num_classes) - class logits
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -20,7 +23,7 @@ class CNNScratch(BaseECGModel):
         
         Args:
             config: Configuration dictionary. Should contain:
-                - num_classes: Number of output classes
+                - data.task_type: "regression" (default) or "classification"
                 - dropout_rate: Dropout rate (from baseline.yaml)
                 - model: CNN-specific parameters (optional)
         """
@@ -30,11 +33,6 @@ class CNNScratch(BaseECGModel):
         # Config structure: config["training"]["dropout_rate"]
         training_config = config.get("training", {})
         dropout_rate = training_config.get("dropout_rate", 0.3)
-        
-        # Get num_classes from model config or use from base class
-        model_config = config.get("model", {})
-        num_classes = model_config.get("num_classes", self.num_classes)
-        self.num_classes = num_classes
         
         # Input: (B, 12, 5000) - 12 leads, 5000 time steps
         
@@ -95,11 +93,14 @@ class CNNScratch(BaseECGModel):
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
         
-        # Classification Head
+        # Prediction Head
         self.dropout1 = nn.Dropout(dropout_rate)
         self.fc1 = nn.Linear(feature_dim, 64)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(64, self.num_classes)
+        
+        # Output layer: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc2 = nn.Linear(64, output_dim)
         
         self.relu = nn.ReLU()
     
@@ -119,7 +120,8 @@ class CNNScratch(BaseECGModel):
                                None if diagnosis features are disabled.
         
         Returns:
-            logits: Output logits of shape (B, num_classes)
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
         """
         # Conv Block 1
         x = self.conv1(x)

@@ -1,0 +1,56 @@
+# HuBERT-ECG model configuration
+# Merges with baseline_with_aug.yaml or baseline_no_aug.yaml
+
+# Model-specific configuration
+model:
+  type: "HuBERT_ECG"
+  num_classes: 8  # Will be overridden by los_binning config (exact_days with max_days=7)
+  
+  # HuBERT Encoder Configuration
+  hubert:
+    checkpoint_path: "model.safetensors"  # Relative to cache_dir, or absolute path
+    config_path: "config.json"  # Optional, relative to cache_dir
+    hidden_size: 768  # HuBERT hidden dimension
+    freeze_backbone: true  # Initial freeze for transfer learning (Phase 1)
+    # Preprocessing configuration:
+    # - apply_preprocessing: false (default) - Use for P1 dataset which is already preprocessed:
+    #   * Bandpass: Butterworth (0.5-50 Hz, 4th order, filtfilt)
+    #   * Resampling: 500 Hz
+    #   * Segmentation: 10s = 5000 samples
+    #   * Normalization: Z-score per lead (mean=0, std=1)
+    # - apply_preprocessing: true - Apply HuBERT-specific preprocessing (for raw data only):
+    #   * Bandpass: FIR (0.05-47 Hz) - DIFFERENT from P1 preprocessing!
+    #   * Normalization: Min-Max scaling [-1, 1] - DIFFERENT from P1 preprocessing!
+    #   WARNING: Do not apply both preprocessing methods - they are incompatible!
+    apply_preprocessing: false  # false = use P1 preprocessed data (recommended)
+    
+  # NO input_adapter Config!
+  # HuBERT has built-in Feature Extractor (5 Conv Layers with downsampling)
+  # Input: (B, 12, 5000) @ 500Hz → Feature Extractor → (B, seq_len, 768)
+  
+  # Pretrained weights
+  pretrained:
+    enabled: true
+    cache_dir: "data/pretrained_weights/Hubert_ECG/base"
+    
+  # Feature dimensions
+  feature_dim: 768  # Output from HuBERT encoder
+  shared_dim: 128  # Shared layer dimension
+
+# Variable Late Fusion Features (can be enabled/disabled via config)
+# These are typically merged from separate feature configs
+data:
+  demographic_features:
+    enabled: true  # Enabled: Age + Sex features (merged from demographic_features.yaml)
+    
+  diagnosis_features:
+    enabled: false  # Disabled: No diagnosis features for this training
+
+# Multi-task learning configuration
+multi_task:
+  enabled: true
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
+  los_use_weighted_loss: false
+  mortality_use_weighted_loss: false
+

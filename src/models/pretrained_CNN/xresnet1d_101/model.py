@@ -1,4 +1,4 @@
-"""FastAI xResNet1D-101 model for ECG classification.
+"""FastAI xResNet1D-101 model for ECG regression/classification.
 
 Based on FastAI xResNet architecture, adapted for 1D ECG signals.
 Pretrained weights from PTB-XL dataset.
@@ -13,7 +13,7 @@ from .blocks import XResNetBlock1D
 
 
 class XResNet1D101(BaseECGModel):
-    """FastAI xResNet1D-101 architecture for ECG classification.
+    """FastAI xResNet1D-101 architecture for ECG regression/classification.
     
     Architecture:
     - Stem: 3 Convolutional Layers (12 → 32 → 32 → 64)
@@ -187,7 +187,9 @@ class XResNet1D101(BaseECGModel):
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
         
-        self.fc = nn.Linear(feature_dim, self.num_classes)
+        # Output layer: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc = nn.Linear(feature_dim, output_dim)
         
         # Load pretrained weights if enabled
         self._load_pretrained_weights(config)
@@ -393,7 +395,8 @@ class XResNet1D101(BaseECGModel):
                                None if diagnosis features are disabled.
         
         Returns:
-            logits: Output logits of shape (B, num_classes)
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
         """
         # Stem
         x = self.stem(x)  # (B, 64, 5000)

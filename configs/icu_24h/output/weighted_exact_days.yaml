@@ -1,14 +1,11 @@
-
-# Baseline configuration for 24h ECG dataset with class weights for exact_days (8 classes)
+# Configuration for 24h ECG dataset for LOS REGRESSION
 # This config is specifically for the 24h dataset (P1): data/icu_ecgs_24h/P1
-# Uses exact_days binning strategy with max_days=7 (8 classes: 0-7)
-# Class weights are calculated based on the class distribution of this dataset
 # 
-# IMPORTANT: This config is dataset-specific. Do not use for other datasets!
+# IMPORTANT: This is a LOS REGRESSION config!
+# LOS values are continuous (days), not binned into classes.
 #
 # MODEL-AGNOSTIC: This config can be used with any model by combining it with
-# the appropriate model config (e.g., cnn_scratch.yaml, resnet1d_14_scratch.yaml, etc.)
-# The model's num_classes will be automatically set to 8 based on los_binning settings.
+# the appropriate model config (e.g., cnn_scratch.yaml, deepecg_sl.yaml, etc.)
 
 # Random seed for reproducibility
 seed: 42
@@ -25,10 +22,9 @@ data:
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
   
-  # LOS binning strategy - exact_days with 8 classes (max_days=7)
-  los_binning:
-    strategy: "exact_days"  # "intervals" (old 10-class) or "exact_days" (new, e.g., 8-class)
-    max_days: 7  # Only used for "exact_days" strategy - 7 = 8 classes (0-7)
+  # LOS task type: REGRESSION
+  # LOS values are continuous (days), not binned into classes
+  los_task: "regression"  # "regression" or "classification"
   
   # Preprocessing (same as baseline)
   preprocessing:
@@ -76,23 +72,10 @@ training:
     patience: 5
     min_lr: 1e-6
   
-  # Loss function with class weights for 24h dataset (exact_days, 8 classes)
-  # Weights calculated based on training set distribution (34,838 samples):
-  # Class distribution: [12411, 8322, 4543, 2654, 1672, 1089, 829, 3318]
-  # Method: balanced weights (n_samples / (n_classes * count[i]))
-  # Normalized so mean = 1.0
+  # Loss function - MSE for LOS REGRESSION
   loss:
-    type: "weighted_ce"
-    enabled: true  # Set to false to disable weighted classes (useful for balanced datasets)
-    weight: [0.2, 0.3, 0.5, 0.8, 1.3, 1.9, 2.5, 0.6]  # 8 classes for exact_days (max_days=7)
-  # Class 0: 0.17 (12,411 samples, 35.62%) - 1 day
-  # Class 1: 0.25 (8,322 samples, 23.89%) - 2 days
-  # Class 2: 0.46 (4,543 samples, 13.04%) - 3 days
-  # Class 3: 0.79 (2,654 samples, 7.62%) - 4 days
-  # Class 4: 1.25 (1,672 samples, 4.80%) - 5 days
-  # Class 5: 1.92 (1,089 samples, 3.13%) - 6 days
-  # Class 6: 2.53 (829 samples, 2.38%) - 7 days
-  # Class 7: 0.63 (3,318 samples, 9.52%) - >=8 days
+    type: "mse"  # "mse" (Mean Squared Error) or "l1" (Mean Absolute Error) for regression
+    # Note: For classification tasks, use "cross_entropy", "focal", or "weighted_ce"
 
 # Validation settings
 validation:
@@ -106,8 +89,8 @@ test_split: 0.1  # 10% for 80-10-10 split
 early_stopping:
   enabled: true
   patience: 7
-  monitor: "val_loss"
-  mode: "min"
+  monitor: "val_loss"  # Options: "val_loss", "val_los_mae" for regression
+  mode: "min"  # "min" for loss/MAE
 
 # Checkpointing
 checkpoint:
@@ -122,22 +105,22 @@ logging:
   use_tensorboard: true
   log_frequency: 10
 
-# Evaluation metrics
+# Evaluation metrics for REGRESSION
 evaluation:
   metrics:
-    - "accuracy"
-    - "f1_score"
-    - "precision"
-    - "recall"
-    - "auc_roc"
-    - "auc_pr"
+    - "mae"  # Mean Absolute Error
+    - "rmse"  # Root Mean Squared Error
+    - "r2"  # R² Score
+    - "median_ae"  # Median Absolute Error
+    # Mortality metrics (binary classification)
+    - "accuracy"  # For mortality
+    - "auc_roc"  # For mortality
 
-# Multi-task learning settings (LOS + Mortality)
+# Multi-task learning settings (LOS Regression + Mortality Classification)
 multi_task:
   enabled: true
   admissions_path: "data/labeling/labels_csv/admissions.csv"
-  los_loss_weight: 1.0
-  mortality_loss_weight: 1.0
+  los_loss_weight: 1.0  # Weight for LOS REGRESSION loss (MSE)
+  mortality_loss_weight: 1.0  # Weight for mortality prediction loss (BCE)
   mortality_use_weighted_loss: true  # Weighted BCE for mortality (class imbalance: 92.3% vs 7.7%)
   mortality_pos_weight: 12.05  # pos_weight = num_negative / num_positive = 25961 / 2155
-

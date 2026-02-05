@@ -1,4 +1,4 @@
-"""Common training loop implementation."""
+"""Common training loop implementation for regression and classification."""
 
 from typing import Dict, Any, Tuple
 import numpy as np
@@ -22,6 +22,32 @@ def _is_multi_task_model(model: nn.Module) -> bool:
         return False
 
 
+def _compute_regression_metrics(predictions: np.ndarray, targets: np.ndarray) -> Dict[str, float]:
+    """Compute regression metrics.
+    
+    Args:
+        predictions: Predicted values (continuous)
+        targets: Ground truth values (continuous)
+    
+    Returns:
+        Dictionary with MAE, RMSE, R² metrics
+    """
+    mae = np.abs(predictions - targets).mean()
+    mse = ((predictions - targets) ** 2).mean()
+    rmse = np.sqrt(mse)
+    
+    # R² score
+    ss_res = ((targets - predictions) ** 2).sum()
+    ss_tot = ((targets - targets.mean()) ** 2).sum()
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    
+    return {
+        "mae": float(mae),
+        "rmse": float(rmse),
+        "r2": float(r2),
+    }
+
+
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
@@ -33,6 +59,7 @@ def train_epoch(
     """Train for one epoch.
     
     Supports both single-task (LOS only) and multi-task (LOS + Mortality) models.
+    Now supports regression for LOS (continuous prediction in days).
     
     Args:
         model: Model to train.
@@ -51,8 +78,12 @@ def train_epoch(
     total_loss = 0.0
     total_los_loss = 0.0
     total_mortality_loss = 0.0
-    los_correct = 0
-    los_total = 0
+    
+    # Regression metrics for LOS
+    all_los_predictions = []
+    all_los_targets = []
+    
+    # Mortality metrics
     mortality_correct = 0
     mortality_total = 0
     
@@ -60,9 +91,9 @@ def train_epoch(
     
     for batch in train_loader:
         signals = batch["signal"].to(device)  # (B, C, T)
-        labels = batch["label"].to(device)  # (B,)
+        labels = batch["label"].to(device)  # (B,) - float for regression
         
-        # Note: Unmatched samples (label == -1) should already be filtered
+        # Note: Unmatched samples (label < 0) should already be filtered
         # in dataset initialization, but double-check for safety
         valid_mask = labels >= 0
         if not valid_mask.any():
@@ -99,12 +130,12 @@ def train_epoch(
         # Handle multi-task vs single-task
         if is_multi_task and isinstance(outputs, dict):
             # Multi-task model
-            los_logits = outputs["los"]
+            los_predictions = outputs["los"]  # (B, 1) for regression
             mortality_probs = outputs["mortality"]
             
             if isinstance(criterion, MultiTaskLoss):
                 loss_dict = criterion(
-                    los_logits, labels,
+                    los_predictions, labels,  # labels are float for regression
                     mortality_probs, mortality_labels
                 )
                 loss = loss_dict["total"]
@@ -112,22 +143,41 @@ def train_epoch(
                 mortality_loss = loss_dict["mortality"]
             else:
                 # Fallback: use LOS loss only if MultiTaskLoss not provided
-                loss = criterion(los_logits, labels)
+                los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                loss = criterion(los_preds_flat, labels.float())
+                los_loss = loss
+                mortality_loss = torch.tensor(0.0, device=device)
+        elif is_multi_task and isinstance(outputs, tuple):
+            # Tuple output (los_predictions, mortality_probs)
+            los_predictions, mortality_probs = outputs
+            
+            if isinstance(criterion, MultiTaskLoss):
+                loss_dict = criterion(
+                    los_predictions, labels,
+                    mortality_probs, mortality_labels
+                )
+                loss = loss_dict["total"]
+                los_loss = loss_dict["los"]
+                mortality_loss = loss_dict["mortality"]
+            else:
+                los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                loss = criterion(los_preds_flat, labels.float())
                 los_loss = loss
                 mortality_loss = torch.tensor(0.0, device=device)
         else:
             # Single-task model
-            logits = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
-            loss = criterion(logits, labels)
+            los_predictions = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
+            los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+            loss = criterion(los_preds_flat, labels.float())
             los_loss = loss
             mortality_loss = torch.tensor(0.0, device=device)
-            los_logits = logits
+            mortality_probs = None
         
         # Check for NaN/Inf in loss
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: NaN/Inf loss detected! Skipping batch.")
             print(f"  Signal stats: min={signals.min():.4f}, max={signals.max():.4f}, mean={signals.mean():.4f}, std={signals.std():.4f}")
-            print(f"  Labels: {labels.unique()}")
+            print(f"  Labels: min={labels.min():.2f}, max={labels.max():.2f}")
             continue
         
         # Backward pass
@@ -144,22 +194,33 @@ def train_epoch(
         total_los_loss += los_loss.item()
         total_mortality_loss += mortality_loss.item()
         
-        # LOS metrics
-        los_predictions = los_logits.argmax(dim=1)
-        los_correct += (los_predictions == labels).sum().item()
-        los_total += labels.size(0)
+        # LOS regression metrics - collect predictions and targets
+        los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+        all_los_predictions.extend(los_preds_flat.detach().cpu().numpy().tolist())
+        all_los_targets.extend(labels.cpu().numpy().tolist())
         
         # Mortality metrics (if available)
-        if is_multi_task and mortality_labels is not None:
+        if is_multi_task and mortality_labels is not None and mortality_probs is not None:
             valid_mortality_mask = mortality_labels >= 0
             if valid_mortality_mask.any():
-                mortality_preds = (mortality_probs.squeeze(1) > 0.5).long()
+                mortality_preds = (mortality_probs.squeeze(-1) > 0.5).long()
                 mortality_correct += (mortality_preds[valid_mortality_mask] == mortality_labels[valid_mortality_mask]).sum().item()
                 mortality_total += valid_mortality_mask.sum().item()
     
+    # Compute regression metrics
+    if len(all_los_predictions) > 0:
+        regression_metrics = _compute_regression_metrics(
+            np.array(all_los_predictions),
+            np.array(all_los_targets)
+        )
+    else:
+        regression_metrics = {"mae": 0.0, "rmse": 0.0, "r2": 0.0}
+    
     metrics = {
         "train_loss": total_loss / len(train_loader) if len(train_loader) > 0 else 0.0,
-        "train_los_acc": los_correct / los_total if los_total > 0 else 0.0,
+        "train_los_mae": regression_metrics["mae"],
+        "train_los_rmse": regression_metrics["rmse"],
+        "train_los_r2": regression_metrics["r2"],
     }
     
     if is_multi_task:
@@ -181,9 +242,11 @@ def validate_epoch(
     
     Policy: Stay-level aggregation (Option A)
     - Group predictions by stay_id
-    - Aggregate logits per stay by taking mean across ECGs
+    - Aggregate predictions per stay by taking mean across ECGs
     - Compute metrics on stays (one prediction per stay)
     - This avoids inflating performance by having many ECGs per ICU stay
+    
+    For regression: LOS predictions are continuous values in days.
     
     Args:
         model: Model to validate.
@@ -198,16 +261,16 @@ def validate_epoch(
     is_multi_task = isinstance(criterion, MultiTaskLoss) or _is_multi_task_model(model)
     
     # Collect all predictions and metadata for stay-level aggregation
-    stay_los_logits = {}  # stay_id -> list of LOS logits
+    stay_los_predictions = {}  # stay_id -> list of LOS predictions
     stay_mortality_probs = {}  # stay_id -> list of mortality probs
-    stay_los_labels = {}  # stay_id -> LOS label
+    stay_los_labels = {}  # stay_id -> LOS label (continuous)
     stay_mortality_labels = {}  # stay_id -> mortality label
     stay_losses = []  # For computing average loss
     
     with torch.no_grad():
         for batch in val_loader:
             signals = batch["signal"].to(device)  # (B, C, T)
-            labels = batch["label"].to(device)  # (B,)
+            labels = batch["label"].to(device)  # (B,) - float for regression
             meta = batch["meta"]
             
             # Get mortality labels if available
@@ -215,7 +278,7 @@ def validate_epoch(
             if is_multi_task and "mortality_label" in batch:
                 mortality_labels_batch = batch["mortality_label"].to(device)
             
-            # Note: Unmatched samples (label == -1) should already be filtered
+            # Note: Unmatched samples (label < 0) should already be filtered
             # in dataset, but double-check for safety
             valid_mask = labels >= 0
             if not valid_mask.any():
@@ -244,23 +307,36 @@ def validate_epoch(
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
-                los_logits = outputs["los"]
+                los_predictions = outputs["los"]
                 mortality_probs = outputs["mortality"]
                 
                 # Compute loss if MultiTaskLoss
                 if isinstance(criterion, MultiTaskLoss):
                     loss_dict = criterion(
-                        los_logits, labels,
+                        los_predictions, labels,
                         mortality_probs, mortality_labels_batch
                     )
                     loss = loss_dict["total"]
                 else:
-                    # Fallback: use LOS loss only
-                    loss = criterion(los_logits, labels)
+                    los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                    loss = criterion(los_preds_flat, labels.float())
+            elif is_multi_task and isinstance(outputs, tuple):
+                los_predictions, mortality_probs = outputs
+                
+                if isinstance(criterion, MultiTaskLoss):
+                    loss_dict = criterion(
+                        los_predictions, labels,
+                        mortality_probs, mortality_labels_batch
+                    )
+                    loss = loss_dict["total"]
+                else:
+                    los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                    loss = criterion(los_preds_flat, labels.float())
             else:
                 # Single-task model
-                los_logits = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
-                loss = criterion(los_logits, labels)
+                los_predictions = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
+                los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                loss = criterion(los_preds_flat, labels.float())
                 mortality_probs = None
             
             stay_losses.append(loss.item())
@@ -272,12 +348,13 @@ def validate_epoch(
                     # Skip if stay_id not available (should not happen after filtering)
                     continue
                 
-                # LOS aggregation
-                if stay_id not in stay_los_logits:
-                    stay_los_logits[stay_id] = []
-                    stay_los_labels[stay_id] = labels[i].item()
+                # LOS aggregation - store continuous predictions
+                if stay_id not in stay_los_predictions:
+                    stay_los_predictions[stay_id] = []
+                    stay_los_labels[stay_id] = labels[i].item()  # Ground truth LOS in days
                 
-                stay_los_logits[stay_id].append(los_logits[i].cpu())
+                los_pred = los_predictions[i].squeeze(-1) if los_predictions.dim() > 1 else los_predictions[i]
+                stay_los_predictions[stay_id].append(los_pred.cpu().item())
                 
                 # Mortality aggregation (if available)
                 if is_multi_task and mortality_probs is not None:
@@ -285,40 +362,41 @@ def validate_epoch(
                         if mortality_labels_batch is not None:
                             stay_mortality_labels[stay_id] = mortality_labels_batch[i].item()
                         stay_mortality_probs[stay_id] = []
-                    stay_mortality_probs[stay_id].append(mortality_probs[i].cpu())
+                    stay_mortality_probs[stay_id].append(mortality_probs[i].cpu().item())
     
-    # Aggregate logits/probs per stay (mean aggregation)
-    stay_aggregated_los_logits = []
+    # Aggregate predictions per stay (mean aggregation)
+    stay_aggregated_los_predictions = []
     stay_aggregated_los_labels = []
     
-    for stay_id in stay_los_logits:
-        # Mean aggregation of LOS logits across ECGs in the same stay
-        aggregated = torch.stack(stay_los_logits[stay_id]).mean(dim=0)  # (num_classes,)
-        stay_aggregated_los_logits.append(aggregated)
+    for stay_id in stay_los_predictions:
+        # Mean aggregation of LOS predictions across ECGs in the same stay
+        aggregated = np.mean(stay_los_predictions[stay_id])
+        stay_aggregated_los_predictions.append(aggregated)
         stay_aggregated_los_labels.append(stay_los_labels[stay_id])
     
-    if len(stay_aggregated_los_logits) == 0:
+    if len(stay_aggregated_los_predictions) == 0:
         return {
             "val_loss": 0.0,
-            "val_los_acc": 0.0,
+            "val_los_mae": 0.0,
+            "val_los_rmse": 0.0,
+            "val_los_r2": 0.0,
         }
     
-    # Stack aggregated predictions
-    stay_los_logits_tensor = torch.stack(stay_aggregated_los_logits)  # (num_stays, num_classes)
-    stay_los_labels_tensor = torch.tensor(stay_aggregated_los_labels, dtype=torch.long)  # (num_stays,)
+    # Compute regression metrics on stay-level
+    predictions_np = np.array(stay_aggregated_los_predictions)
+    labels_np = np.array(stay_aggregated_los_labels)
     
-    # Compute LOS metrics on stay-level
-    stay_los_predictions = stay_los_logits_tensor.argmax(dim=1)
-    los_correct = (stay_los_predictions == stay_los_labels_tensor).sum().item()
-    total_stays = len(stay_los_labels_tensor)
+    regression_metrics = _compute_regression_metrics(predictions_np, labels_np)
     
     # Average loss across stays
     avg_loss = sum(stay_losses) / len(stay_losses) if stay_losses else 0.0
     
     metrics = {
         "val_loss": avg_loss,
-        "val_los_acc": los_correct / total_stays if total_stays > 0 else 0.0,
-        "val_num_stays": total_stays,
+        "val_los_mae": regression_metrics["mae"],
+        "val_los_rmse": regression_metrics["rmse"],
+        "val_los_r2": regression_metrics["r2"],
+        "val_num_stays": len(stay_aggregated_los_predictions),
     }
     
     # Mortality metrics (if available)
@@ -329,32 +407,33 @@ def validate_epoch(
         
         for stay_id in stay_mortality_probs:
             if stay_id in stay_mortality_labels:
-                aggregated = torch.stack(stay_mortality_probs[stay_id]).mean(dim=0)  # (1,)
+                aggregated = np.mean(stay_mortality_probs[stay_id])
                 stay_aggregated_mortality_probs.append(aggregated)
                 stay_aggregated_mortality_labels.append(stay_mortality_labels[stay_id])
         
         if stay_aggregated_mortality_probs:
-            mortality_probs_tensor = torch.stack(stay_aggregated_mortality_probs).squeeze(1)  # (num_stays,)
-            mortality_labels_tensor = torch.tensor(stay_aggregated_mortality_labels, dtype=torch.long)  # (num_stays,)
+            mortality_probs_np = np.array(stay_aggregated_mortality_probs)
+            mortality_labels_np = np.array(stay_aggregated_mortality_labels)
             
             # Filter valid mortality labels
-            valid_mortality_mask = mortality_labels_tensor >= 0
+            valid_mortality_mask = mortality_labels_np >= 0
             if valid_mortality_mask.any():
-                mortality_preds = (mortality_probs_tensor[valid_mortality_mask] > 0.5).long()
-                mortality_correct = (mortality_preds == mortality_labels_tensor[valid_mortality_mask]).sum().item()
-                mortality_total = valid_mortality_mask.sum().item()
+                mortality_probs_valid = mortality_probs_np[valid_mortality_mask]
+                mortality_labels_valid = mortality_labels_np[valid_mortality_mask]
+                
+                mortality_preds = (mortality_probs_valid > 0.5).astype(int)
+                mortality_correct = (mortality_preds == mortality_labels_valid).sum()
+                mortality_total = len(mortality_labels_valid)
                 
                 metrics["val_mortality_acc"] = mortality_correct / mortality_total if mortality_total > 0 else 0.0
                 
                 # Calculate AUC
                 try:
                     from sklearn.metrics import roc_auc_score
-                    mortality_auc = roc_auc_score(
-                        mortality_labels_tensor[valid_mortality_mask].numpy(),
-                        mortality_probs_tensor[valid_mortality_mask].numpy()
-                    )
-                    metrics["val_mortality_auc"] = float(mortality_auc)
-                except ImportError:
+                    if len(np.unique(mortality_labels_valid)) > 1:
+                        mortality_auc = roc_auc_score(mortality_labels_valid, mortality_probs_valid)
+                        metrics["val_mortality_auc"] = float(mortality_auc)
+                except (ImportError, ValueError):
                     pass
     
     return metrics
@@ -365,41 +444,38 @@ def evaluate_with_detailed_metrics(
     val_loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-    num_classes: int = 10,
 ) -> Dict[str, Any]:
-    """Evaluate model with detailed metrics including confusion matrix, per-class metrics.
+    """Evaluate model with detailed regression metrics.
     
     Supports both single-task (LOS only) and multi-task (LOS + Mortality) models.
     
     Policy: Stay-level aggregation (same as validate_epoch)
     - Group predictions by stay_id
-    - Aggregate logits/probs per stay by taking mean across ECGs
+    - Aggregate predictions per stay by taking mean across ECGs
     - Compute metrics on stays (one prediction per stay)
     
-    For multi-task models, computes:
-    - LOS metrics: Overall + per-class (as before, unchanged)
-    - Mortality metrics: Overall + per LOS-class
+    For regression, computes:
+    - LOS metrics: MAE, RMSE, R², Median Absolute Error, Percentile Errors
+    - Mortality metrics: Accuracy, Precision, Recall, F1, AUC
     
     Args:
         model: Model to evaluate.
         val_loader: Data loader.
         criterion: Loss function (can be MultiTaskLoss for multi-task).
         device: Device to evaluate on.
-        num_classes: Number of LOS classes.
     
     Returns:
         Dictionary with detailed metrics including:
-        LOS metrics (unchanged):
+        LOS regression metrics:
         - los_loss: Average loss
-        - los_accuracy: Overall accuracy
-        - los_balanced_accuracy: Balanced accuracy
-        - los_macro_precision: Macro-averaged precision
-        - los_macro_recall: Macro-averaged recall
-        - los_macro_f1: Macro-averaged F1-score
-        - los_per_class_precision: List of precision per class
-        - los_per_class_recall: List of recall per class
-        - los_per_class_f1: List of F1-score per class
-        - los_confusion_matrix: Confusion matrix (numpy array)
+        - los_mae: Mean Absolute Error
+        - los_rmse: Root Mean Squared Error
+        - los_r2: R² Score
+        - los_median_ae: Median Absolute Error
+        - los_p25_error: 25th percentile of absolute errors
+        - los_p50_error: 50th percentile (median) of absolute errors
+        - los_p75_error: 75th percentile of absolute errors
+        - los_p90_error: 90th percentile of absolute errors
         
         Mortality metrics (if multi-task):
         - mortality_accuracy: Overall accuracy
@@ -407,16 +483,12 @@ def evaluate_with_detailed_metrics(
         - mortality_recall: Overall recall
         - mortality_f1: Overall F1-score
         - mortality_auc: Overall AUC
-        - mortality_per_los_class: Dict mapping LOS class -> {precision, recall, f1, auc, support}
     """
     try:
         from sklearn.metrics import (
-            confusion_matrix,
             precision_score,
             recall_score,
             f1_score,
-            balanced_accuracy_score,
-            classification_report,
             roc_auc_score,
         )
     except ImportError:
@@ -426,16 +498,16 @@ def evaluate_with_detailed_metrics(
     is_multi_task = isinstance(criterion, MultiTaskLoss) or _is_multi_task_model(model)
     
     # Collect all predictions and metadata for stay-level aggregation
-    stay_los_logits = {}  # stay_id -> list of LOS logits
+    stay_los_predictions = {}  # stay_id -> list of LOS predictions
     stay_mortality_probs = {}  # stay_id -> list of mortality probs
-    stay_los_labels = {}  # stay_id -> LOS label
+    stay_los_labels = {}  # stay_id -> LOS label (continuous)
     stay_mortality_labels = {}  # stay_id -> mortality label
     stay_losses = []  # For computing average loss
     
     with torch.no_grad():
         for batch in val_loader:
             signals = batch["signal"].to(device)  # (B, C, T)
-            labels = batch["label"].to(device)  # (B,)
+            labels = batch["label"].to(device)  # (B,) - float for regression
             meta = batch["meta"]
             
             # Get mortality labels if available
@@ -471,23 +543,35 @@ def evaluate_with_detailed_metrics(
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
-                los_logits = outputs["los"]
+                los_predictions = outputs["los"]
                 mortality_probs = outputs["mortality"]
                 
-                # Compute loss if MultiTaskLoss
                 if isinstance(criterion, MultiTaskLoss):
                     loss_dict = criterion(
-                        los_logits, labels,
+                        los_predictions, labels,
                         mortality_probs, mortality_labels_batch
                     )
                     loss = loss_dict["total"]
                 else:
-                    # Fallback: use LOS loss only
-                    loss = criterion(los_logits, labels)
+                    los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                    loss = criterion(los_preds_flat, labels.float())
+            elif is_multi_task and isinstance(outputs, tuple):
+                los_predictions, mortality_probs = outputs
+                
+                if isinstance(criterion, MultiTaskLoss):
+                    loss_dict = criterion(
+                        los_predictions, labels,
+                        mortality_probs, mortality_labels_batch
+                    )
+                    loss = loss_dict["total"]
+                else:
+                    los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                    loss = criterion(los_preds_flat, labels.float())
             else:
                 # Single-task model
-                los_logits = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
-                loss = criterion(los_logits, labels)
+                los_predictions = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
+                los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
+                loss = criterion(los_preds_flat, labels.float())
                 mortality_probs = None
             
             stay_losses.append(loss.item())
@@ -499,11 +583,12 @@ def evaluate_with_detailed_metrics(
                     continue
                 
                 # LOS aggregation
-                if stay_id not in stay_los_logits:
-                    stay_los_logits[stay_id] = []
+                if stay_id not in stay_los_predictions:
+                    stay_los_predictions[stay_id] = []
                     stay_los_labels[stay_id] = labels[i].item()
                 
-                stay_los_logits[stay_id].append(los_logits[i].cpu())
+                los_pred = los_predictions[i].squeeze(-1) if los_predictions.dim() > 1 else los_predictions[i]
+                stay_los_predictions[stay_id].append(los_pred.cpu().item())
                 
                 # Mortality aggregation (if available)
                 if is_multi_task and mortality_probs is not None:
@@ -511,30 +596,28 @@ def evaluate_with_detailed_metrics(
                         if mortality_labels_batch is not None:
                             stay_mortality_labels[stay_id] = mortality_labels_batch[i].item()
                         stay_mortality_probs[stay_id] = []
-                    stay_mortality_probs[stay_id].append(mortality_probs[i].cpu())
+                    stay_mortality_probs[stay_id].append(mortality_probs[i].cpu().item())
     
-    # Aggregate logits/probs per stay (mean aggregation)
-    stay_aggregated_los_logits = []
+    # Aggregate predictions per stay (mean aggregation)
+    stay_aggregated_los_predictions = []
     stay_aggregated_los_labels = []
     
-    for stay_id in stay_los_logits:
-        # Mean aggregation of LOS logits across ECGs in the same stay
-        aggregated = torch.stack(stay_los_logits[stay_id]).mean(dim=0)  # (num_classes,)
-        stay_aggregated_los_logits.append(aggregated)
+    for stay_id in stay_los_predictions:
+        aggregated = np.mean(stay_los_predictions[stay_id])
+        stay_aggregated_los_predictions.append(aggregated)
         stay_aggregated_los_labels.append(stay_los_labels[stay_id])
     
-    if len(stay_aggregated_los_logits) == 0:
+    if len(stay_aggregated_los_predictions) == 0:
         result = {
             "los_loss": 0.0,
-            "los_accuracy": 0.0,
-            "los_balanced_accuracy": 0.0,
-            "los_macro_precision": 0.0,
-            "los_macro_recall": 0.0,
-            "los_macro_f1": 0.0,
-            "los_per_class_precision": [0.0] * num_classes,
-            "los_per_class_recall": [0.0] * num_classes,
-            "los_per_class_f1": [0.0] * num_classes,
-            "los_confusion_matrix": None,
+            "los_mae": 0.0,
+            "los_rmse": 0.0,
+            "los_r2": 0.0,
+            "los_median_ae": 0.0,
+            "los_p25_error": 0.0,
+            "los_p50_error": 0.0,
+            "los_p75_error": 0.0,
+            "los_p90_error": 0.0,
             "num_stays": 0,
         }
         if is_multi_task:
@@ -544,84 +627,50 @@ def evaluate_with_detailed_metrics(
                 "mortality_recall": 0.0,
                 "mortality_f1": 0.0,
                 "mortality_auc": 0.0,
-                "mortality_per_los_class": {},
             })
         return result
     
-    # Stack aggregated predictions
-    stay_los_logits_tensor = torch.stack(stay_aggregated_los_logits)  # (num_stays, num_classes)
-    stay_los_labels_tensor = torch.tensor(stay_aggregated_los_labels, dtype=torch.long)  # (num_stays,)
-    
-    # Get LOS predictions
-    stay_los_predictions = stay_los_logits_tensor.argmax(dim=1).numpy()
-    stay_los_labels_np = stay_los_labels_tensor.numpy()
+    # Convert to numpy arrays
+    predictions_np = np.array(stay_aggregated_los_predictions)
+    labels_np = np.array(stay_aggregated_los_labels)
     
     # Average loss
     avg_loss = sum(stay_losses) / len(stay_losses) if stay_losses else 0.0
     
-    # ===== LOS METRICS (unchanged, as before) =====
-    los_accuracy = (stay_los_predictions == stay_los_labels_np).mean()
-    los_balanced_acc = balanced_accuracy_score(stay_los_labels_np, stay_los_predictions)
+    # ===== LOS REGRESSION METRICS =====
+    absolute_errors = np.abs(predictions_np - labels_np)
     
-    # Per-class metrics (with zero_division=0 to handle classes with no predictions)
-    los_precision_per_class = precision_score(
-        stay_los_labels_np, stay_los_predictions, 
-        labels=list(range(num_classes)), 
-        average=None, 
-        zero_division=0
-    )
-    los_recall_per_class = recall_score(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes)),
-        average=None,
-        zero_division=0
-    )
-    los_f1_per_class = f1_score(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes)),
-        average=None,
-        zero_division=0
-    )
+    # Basic metrics
+    mae = absolute_errors.mean()
+    mse = ((predictions_np - labels_np) ** 2).mean()
+    rmse = np.sqrt(mse)
     
-    # Macro-averaged metrics
-    los_macro_precision = precision_score(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes)),
-        average='macro',
-        zero_division=0
-    )
-    los_macro_recall = recall_score(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes)),
-        average='macro',
-        zero_division=0
-    )
-    los_macro_f1 = f1_score(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes)),
-        average='macro',
-        zero_division=0
-    )
+    # R² score
+    ss_res = ((labels_np - predictions_np) ** 2).sum()
+    ss_tot = ((labels_np - labels_np.mean()) ** 2).sum()
+    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
     
-    # Confusion matrix
-    los_cm = confusion_matrix(
-        stay_los_labels_np, stay_los_predictions,
-        labels=list(range(num_classes))
-    )
+    # Median Absolute Error
+    median_ae = np.median(absolute_errors)
+    
+    # Percentile errors
+    p25_error = np.percentile(absolute_errors, 25)
+    p50_error = np.percentile(absolute_errors, 50)  # Same as median
+    p75_error = np.percentile(absolute_errors, 75)
+    p90_error = np.percentile(absolute_errors, 90)
     
     # Build result dictionary with LOS metrics
     result = {
         "los_loss": avg_loss,
-        "los_accuracy": float(los_accuracy),
-        "los_balanced_accuracy": float(los_balanced_acc),
-        "los_macro_precision": float(los_macro_precision),
-        "los_macro_recall": float(los_macro_recall),
-        "los_macro_f1": float(los_macro_f1),
-        "los_per_class_precision": los_precision_per_class.tolist(),
-        "los_per_class_recall": los_recall_per_class.tolist(),
-        "los_per_class_f1": los_f1_per_class.tolist(),
-        "los_confusion_matrix": los_cm.tolist(),
-        "num_stays": len(stay_los_labels_np),
+        "los_mae": float(mae),
+        "los_rmse": float(rmse),
+        "los_r2": float(r2),
+        "los_median_ae": float(median_ae),
+        "los_p25_error": float(p25_error),
+        "los_p50_error": float(p50_error),
+        "los_p75_error": float(p75_error),
+        "los_p90_error": float(p90_error),
+        "num_stays": len(predictions_np),
     }
     
     # ===== MORTALITY METRICS (if multi-task) =====
@@ -629,28 +678,22 @@ def evaluate_with_detailed_metrics(
         # Aggregate mortality probs per stay
         stay_aggregated_mortality_probs = []
         stay_aggregated_mortality_labels = []
-        stay_aggregated_los_labels_for_mortality = []  # LOS class for each stay (for per-class metrics)
         
         for stay_id in stay_mortality_probs:
             if stay_id in stay_mortality_labels:
-                aggregated = torch.stack(stay_mortality_probs[stay_id]).mean(dim=0)  # (1,)
+                aggregated = np.mean(stay_mortality_probs[stay_id])
                 stay_aggregated_mortality_probs.append(aggregated)
                 stay_aggregated_mortality_labels.append(stay_mortality_labels[stay_id])
-                # Get LOS class for this stay
-                if stay_id in stay_los_labels:
-                    stay_aggregated_los_labels_for_mortality.append(stay_los_labels[stay_id])
         
         if stay_aggregated_mortality_probs:
-            mortality_probs_tensor = torch.stack(stay_aggregated_mortality_probs).squeeze(1)  # (num_stays,)
-            mortality_labels_tensor = torch.tensor(stay_aggregated_mortality_labels, dtype=torch.long)  # (num_stays,)
-            los_labels_for_mortality = torch.tensor(stay_aggregated_los_labels_for_mortality, dtype=torch.long)  # (num_stays,)
+            mortality_probs_np = np.array(stay_aggregated_mortality_probs)
+            mortality_labels_np = np.array(stay_aggregated_mortality_labels)
             
             # Filter valid mortality labels
-            valid_mortality_mask = mortality_labels_tensor >= 0
+            valid_mortality_mask = mortality_labels_np >= 0
             if valid_mortality_mask.any():
-                mortality_probs_valid = mortality_probs_tensor[valid_mortality_mask].numpy()
-                mortality_labels_valid = mortality_labels_tensor[valid_mortality_mask].numpy()
-                los_labels_valid = los_labels_for_mortality[valid_mortality_mask].numpy()
+                mortality_probs_valid = mortality_probs_np[valid_mortality_mask]
+                mortality_labels_valid = mortality_labels_np[valid_mortality_mask]
                 
                 # Overall mortality metrics
                 mortality_preds = (mortality_probs_valid > 0.5).astype(int)
@@ -660,9 +703,11 @@ def evaluate_with_detailed_metrics(
                 mortality_f1 = f1_score(mortality_labels_valid, mortality_preds, zero_division=0)
                 
                 try:
-                    mortality_auc = roc_auc_score(mortality_labels_valid, mortality_probs_valid)
+                    if len(np.unique(mortality_labels_valid)) > 1:
+                        mortality_auc = roc_auc_score(mortality_labels_valid, mortality_probs_valid)
+                    else:
+                        mortality_auc = 0.0
                 except ValueError:
-                    # Can happen if only one class present
                     mortality_auc = 0.0
                 
                 result.update({
@@ -672,49 +717,5 @@ def evaluate_with_detailed_metrics(
                     "mortality_f1": float(mortality_f1),
                     "mortality_auc": float(mortality_auc),
                 })
-                
-                # Mortality metrics per LOS class
-                mortality_per_los_class = {}
-                for los_class in range(num_classes):
-                    mask = los_labels_valid == los_class
-                    if mask.sum() > 0:
-                        mortality_probs_class = mortality_probs_valid[mask]
-                        mortality_labels_class = mortality_labels_valid[mask]
-                        
-                        if len(np.unique(mortality_labels_class)) > 1:  # Both classes present
-                            mortality_preds_class = (mortality_probs_class > 0.5).astype(int)
-                            precision_class = precision_score(mortality_labels_class, mortality_preds_class, zero_division=0)
-                            recall_class = recall_score(mortality_labels_class, mortality_preds_class, zero_division=0)
-                            f1_class = f1_score(mortality_labels_class, mortality_preds_class, zero_division=0)
-                            
-                            try:
-                                auc_class = roc_auc_score(mortality_labels_class, mortality_probs_class)
-                            except ValueError:
-                                auc_class = 0.0
-                        else:
-                            # Only one class present, set metrics to 0
-                            precision_class = 0.0
-                            recall_class = 0.0
-                            f1_class = 0.0
-                            auc_class = 0.0
-                        
-                        mortality_per_los_class[los_class] = {
-                            "precision": float(precision_class),
-                            "recall": float(recall_class),
-                            "f1": float(f1_class),
-                            "auc": float(auc_class),
-                            "support": int(mask.sum()),
-                        }
-                    else:
-                        # No samples for this LOS class
-                        mortality_per_los_class[los_class] = {
-                            "precision": 0.0,
-                            "recall": 0.0,
-                            "f1": 0.0,
-                            "auc": 0.0,
-                            "support": 0,
-                        }
-                
-                result["mortality_per_los_class"] = mortality_per_los_class
     
     return result

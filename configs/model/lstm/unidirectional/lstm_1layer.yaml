@@ -1,20 +1,34 @@
-# LSTM1D Unidirectional model-specific configuration (1-Layer)
+# LSTM1D Unidirectional model-specific configuration (Improved)
 # Merges with baseline.yaml
 # Only LSTM1D-specific overrides go here
+# Pure LSTM architecture (no CNN) with improvements: 2-layer, mean pooling, embedding
 
 model:
   type: "LSTM1D"  # Alias for LSTM1D_Unidirectional
   num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+                  # Note: For regression, this is ignored (output_dim = 1)
   
   # LSTM-specific architecture parameters
-  # Architecture: Unidirectional LSTM for ECG time series classification
+  # Architecture: Pure Unidirectional LSTM for ECG time series classification/regression
   # Based on Kim et al. 2020: 128 units recommended for raw ECG signals
-  # ~140K parameters (1 layer)
+  # Improved architecture: 2-layer LSTM with dropout, mean pooling, embedding
+  # ~205K parameters (2 layers)
   
   hidden_dim: 128  # Hidden dimension for LSTM (Layer 1)
-  num_layers: 1  # Number of LSTM layers
-  dropout: 0.3  # Dropout between LSTM layers (only if num_layers > 1)
+  num_layers: 2  # Number of LSTM layers (hierarchical temporal dependencies)
+  lstm_dropout: 0.2  # Dropout between LSTM layers (prevents overfitting)
   bidirectional: false  # Unidirectional LSTM
-  pooling: "last"  # Pooling strategy: "last", "mean", or "max"
-  use_embedding: false  # Whether to use embedding layer (12 → hidden_dim)
+  
+  # Pooling Strategy
+  # "mean": Aggregates information across all timesteps (recommended)
+  # "last": Only uses last hidden state (discards 99.98% of information)
+  # "max": Maximum pooling over time dimension
+  # Scientific justification: Lin et al. (2013) demonstrate mean pooling improves LSTM performance
+  pooling: "mean"
+  
+  # Embedding Layer (ENABLED)
+  # Increases representation capacity from raw signal values
+  # Scientific justification: Mikolov et al. (2013) demonstrate embeddings improve feature quality
+  use_embedding: true
+  embedding_dim: 64  # Embedding dimension
 

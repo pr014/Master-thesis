@@ -1,4 +1,4 @@
-"""EfficientNet1D-B1 model for ECG classification.
+"""EfficientNet1D-B1 model for ECG regression/classification.
 
 Based on Tan & Le (2019) EfficientNet paper, adapted for 1D ECG signals.
 Architecture follows EfficientNet-B1 specifications with ~7.8M parameters.
@@ -13,7 +13,7 @@ from .blocks import MBConvBlock1D, Swish
 
 
 class EfficientNet1D_B1(BaseECGModel):
-    """EfficientNet1D-B1 architecture for ECG classification.
+    """EfficientNet1D-B1 architecture for ECG regression/classification.
     
     Architecture (from EfficientNet-B1 paper):
     - Stem: Conv1d 12→32, kernel=3, stride=2, padding=1
@@ -37,7 +37,7 @@ class EfficientNet1D_B1(BaseECGModel):
         
         Args:
             config: Configuration dictionary. Should contain:
-                - num_classes: Number of output classes
+                - data.task_type: "regression" (default) or "classification"
                 - dropout_rate: Dropout rate (from baseline.yaml)
                 - model: Model-specific parameters (optional)
         """
@@ -46,11 +46,6 @@ class EfficientNet1D_B1(BaseECGModel):
         # Get dropout rate from config
         training_config = config.get("training", {})
         dropout_rate = training_config.get("dropout_rate", 0.3)
-        
-        # Get num_classes from model config or use from base class
-        model_config = config.get("model", {})
-        num_classes = model_config.get("num_classes", self.num_classes)
-        self.num_classes = num_classes
         
         # Input: (B, 12, 5000) - 12 leads, 5000 time steps
         
@@ -168,7 +163,9 @@ class EfficientNet1D_B1(BaseECGModel):
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
         
-        self.fc = nn.Linear(feature_dim, self.num_classes)
+        # Output layer: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc = nn.Linear(feature_dim, output_dim)
         
         # Load pretrained weights if enabled
         self._load_pretrained_weights(config)
@@ -295,7 +292,8 @@ class EfficientNet1D_B1(BaseECGModel):
                                None if diagnosis features are disabled.
         
         Returns:
-            logits: Output logits of shape (B, num_classes)
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
         """
         # Stem
         x = self.stem(x)  # (B, 32, 2500)

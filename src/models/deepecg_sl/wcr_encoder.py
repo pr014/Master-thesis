@@ -44,8 +44,9 @@ class WCREncoder(nn.Module):
         # Resolve cache directory path (relative to project root)
         cache_dir_path = Path(cache_dir)
         if not cache_dir_path.is_absolute():
-            # Try to find project root (go up from src/models/deepecg_sl/)
-            project_root = Path(__file__).parent.parent.parent.parent.parent
+            # Try to find project root (go up from src/models/deepecg_sl/wcr_encoder.py)
+            # wcr_encoder.py -> deepecg_sl -> models -> src -> MA-thesis-1 (project root)
+            project_root = Path(__file__).parent.parent.parent.parent
             cache_dir_path = project_root / cache_dir
         
         # Handle base_ssl_path - try absolute first, then relative to cache_dir
@@ -157,11 +158,9 @@ class WCREncoder(nn.Module):
         if padding_mask is not None:
             padding_mask = padding_mask.to(self.device)
         
-        # Prepare input for fairseq-signals model
-        # fairseq-signals expects (B, seq_len, features) format
-        if x.dim() == 3 and x.shape[1] == 12:
-            # Input is (B, 12, 2500), transpose to (B, 2500, 12)
-            x = x.transpose(1, 2)
+        # fairseq-signals expects (B, channels, seq_len) format = (B, 12, seq_len)
+        # The ConvFeatureExtraction uses nn.Conv1d which expects (B, C, L)
+        # NO transpose needed - keep input as (B, 12, seq_len)
         
         # Create net_input dictionary
         net_input = {"source": x}
@@ -169,20 +168,37 @@ class WCREncoder(nn.Module):
             net_input["padding_mask"] = padding_mask
         
         # Forward through encoder
-        if self._use_full_model:
-            # Use full model and extract encoder output
-            net_output = self.model(**net_input)
-            # Extract encoder output from net_output
-            if hasattr(net_output, "encoder_out"):
-                encoder_out = net_output.encoder_out
-            elif isinstance(net_output, dict) and "encoder_out" in net_output:
-                encoder_out = net_output["encoder_out"]
-            else:
-                # Fallback: use the model's encoder directly
-                encoder_out = self.encoder(x, padding_mask=padding_mask)
+        # Always use the full model approach to ensure compatibility with fairseq-signals
+        # The model handles padding_mask correctly via net_input dictionary
+        net_output = self.model(**net_input)
+        
+        # Extract encoder output from net_output
+        if hasattr(net_output, "encoder_out"):
+            encoder_out = net_output.encoder_out
+        elif isinstance(net_output, dict) and "encoder_out" in net_output:
+            encoder_out = net_output["encoder_out"]
+        elif hasattr(net_output, "encoder_states") and net_output.encoder_states:
+            # Some fairseq models return encoder_states as a list
+            encoder_out = net_output.encoder_states[-1]  # Take the last layer
         else:
-            # Use encoder directly
-            encoder_out = self.encoder(x, padding_mask=padding_mask)
+            # Last resort: try to extract from encoder directly if accessible
+            # But don't pass padding_mask as keyword argument
+            if hasattr(self, "encoder") and self.encoder is not None:
+                try:
+                    # Try calling encoder without padding_mask
+                    encoder_out = self.encoder(x)
+                except (TypeError, AttributeError):
+                    # If that fails, raise a more informative error
+                    raise RuntimeError(
+                        f"Could not extract encoder output from model. "
+                        f"Model output type: {type(net_output)}, "
+                        f"Available attributes: {dir(net_output) if hasattr(net_output, '__dict__') else 'N/A'}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"Could not extract encoder output from model. "
+                    f"Model output type: {type(net_output)}"
+                )
         
         return encoder_out
     

@@ -1,6 +1,6 @@
-"""Training script for Hybrid CNN-LSTM with LOS bin classification.
-This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
+"""Training script for Hybrid CNN-LSTM with LOS regression.
+
+LOS Regression Task: Predicts continuous LOS in days (not binned classes).
 """
 
 from pathlib import Path
@@ -17,12 +17,14 @@ from src.data.ecg import create_dataloaders
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
-from src.data.labeling import get_num_classes_from_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights."""
-    # Load configs - using exact_days config (8 classes)
+    """Main training function for 24h dataset.
+    
+    LOS Regression Task: Predicts continuous LOS in days.
+    """
+    # Load configs
     base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml")
     
@@ -40,21 +42,21 @@ def main():
     )
     
     print("="*60)
-    print("Training Hybrid CNN-LSTM with Class Weights for 24h Dataset (Exact Days, 8 Classes)")
+    print("Training Hybrid CNN-LSTM for 24h Dataset")
+    print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
-    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
-    if 'weight' in config.get('training', {}).get('loss', {}):
-        weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights: {weights}")
+    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
+    
     model_config = config.get('model', {})
     print(f"CNN: 12→{model_config.get('conv1_out', 32)}→{model_config.get('conv2_out', 64)}→{model_config.get('conv3_out', 128)}")
     print(f"LSTM hidden_dim: {model_config.get('hidden_dim', 128)} (per direction)")
     print(f"LSTM num_layers: {model_config.get('num_layers', 2)}")
     print(f"LSTM bidirectional: {model_config.get('bidirectional', True)}")
     print(f"LSTM pooling: {model_config.get('pooling', 'last')}")
+    
     demographic_config = config.get('data', {}).get('demographic_features', {})
     if demographic_config.get('enabled', False):
         print(f"Demographic features: Enabled (Age & Sex)")
@@ -70,11 +72,6 @@ def main():
     else:
         print(f"Diagnosis features: Disabled")
     print("="*60)
-    
-    # Override num_classes from los_binning to ensure model uses correct number of classes
-    num_classes = get_num_classes_from_config(config)
-    config["model"]["num_classes"] = num_classes
-    print(f"Number of classes (from los_binning): {num_classes}")
     
     # Load ICU stays and create mapper
     icu_mapper = setup_icustays_mapper(config)
@@ -99,7 +96,7 @@ def main():
     
     # Wrap in MultiTaskECGModel if multi-task is enabled
     if is_multi_task:
-        print("Creating Multi-Task model (LOS + Mortality)...")
+        print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
         model = MultiTaskECGModel(base_model, config)
         print(f"Multi-Task model created with {model.count_parameters():,} parameters")
     else:
@@ -108,10 +105,10 @@ def main():
     # Create loss function
     if is_multi_task:
         criterion = get_multi_task_loss(config)
-        print("Using Multi-Task Loss (LOS + Mortality)")
+        print("Using Multi-Task Loss (LOS MSE + Mortality BCE)")
     else:
         criterion = get_loss(config)
-        print("Using Single-Task Loss (LOS only)")
+        print(f"Using Single-Task Loss (LOS MSE: {type(criterion).__name__})")
     
     # Create trainer
     trainer = Trainer(
@@ -138,8 +135,10 @@ def main():
     
     print("Training completed!")
     print(f"Best validation loss: {min(history.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE: {min(history.get('val_los_mae', [float('inf')])):.4f} days")
+    print(f"Best validation R²: {max(history.get('val_los_r2', [float('-inf')])):.4f}")
     
-    # Test evaluation (if test_loader is available)
+    # Test evaluation
     history = evaluate_and_print_results(trainer, test_loader, history, config)
     
     return history
@@ -147,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

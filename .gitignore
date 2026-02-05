@@ -86,3 +86,9 @@ docs/
 
 # Cloned repositories
 clones/
+
+# Test files (local only, not tracked in Git)
+test/
+
+# notebooks files (local only, not tracked in Git)
+notebooks/

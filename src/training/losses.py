@@ -16,13 +16,28 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
         Loss function module.
     """
     loss_config = config.get("training", {}).get("loss", {})
-    loss_type = loss_config.get("type", "cross_entropy")
+    loss_type = loss_config.get("type", "mse")  # Default to MSE for regression
     
-    # Check if weighted classes are enabled
-    use_weighted = loss_config.get("enabled", True)  # Default: enabled for backward compatibility
+    # Check task type - regression or classification
+    data_config = config.get("data", {})
+    task_type = data_config.get("task_type", "regression")  # Default to regression
     
-    if loss_type == "cross_entropy":
-        # Standard cross-entropy loss
+    if task_type == "regression" or loss_type == "mse":
+        # MSE Loss for regression
+        return nn.MSELoss()
+    
+    elif loss_type == "l1" or loss_type == "mae":
+        # L1 Loss (Mean Absolute Error) for regression
+        return nn.L1Loss()
+    
+    elif loss_type == "huber":
+        # Huber Loss (smooth L1) for regression - robust to outliers
+        delta = loss_config.get("delta", 1.0)
+        return nn.HuberLoss(delta=delta)
+    
+    elif loss_type == "cross_entropy":
+        # Standard cross-entropy loss (for backward compatibility with classification)
+        use_weighted = loss_config.get("enabled", True)
         weight = None
         if use_weighted:
             weight = loss_config.get("weight", None)
@@ -30,15 +45,9 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
                 weight = torch.tensor(weight, dtype=torch.float32)
         return nn.CrossEntropyLoss(weight=weight)
     
-    elif loss_type == "focal":
-        # Focal loss (if needed later)
-        alpha = loss_config.get("alpha", 1.0)
-        gamma = loss_config.get("gamma", 2.0)
-        # TODO: Implement FocalLoss class if needed
-        return nn.CrossEntropyLoss()
-    
     elif loss_type == "weighted_ce":
-        # Weighted cross-entropy (only if enabled)
+        # Weighted cross-entropy (for backward compatibility with classification)
+        use_weighted = loss_config.get("enabled", True)
         weight = None
         if use_weighted:
             weight = loss_config.get("weight", None)
@@ -47,51 +56,58 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
         return nn.CrossEntropyLoss(weight=weight)
     
     else:
-        # Default to cross-entropy
-        return nn.CrossEntropyLoss()
+        # Default to MSE for regression
+        return nn.MSELoss()
 
 
 class MultiTaskLoss(nn.Module):
-    """Combined loss for multi-task learning (LOS + Mortality).
+    """Combined loss for multi-task learning (LOS Regression + Mortality Classification).
     
     total_loss = alpha * los_loss + beta * mortality_loss
+    
+    LOS: Regression task using MSE/L1 loss
+    Mortality: Binary classification using BCE loss
     """
     
     def __init__(
         self,
         los_loss_weight: float = 1.0,
         mortality_loss_weight: float = 1.0,
-        los_loss: Optional[nn.Module] = None,
+        los_loss_type: str = "mse",
         mortality_use_weighted: bool = False,
         mortality_pos_weight: Optional[float] = None,
     ):
         """Initialize multi-task loss.
         
         Args:
-            los_loss_weight: Weight for LOS classification loss.
+            los_loss_weight: Weight for LOS regression loss.
             mortality_loss_weight: Weight for mortality prediction loss.
-            los_loss: LOS loss function (default: CrossEntropyLoss).
+            los_loss_type: Type of LOS loss ("mse", "l1", "huber").
             mortality_use_weighted: Whether to use weighted BCE for mortality.
             mortality_pos_weight: Positive class weight for mortality (if weighted).
         """
         super().__init__()
         self.los_loss_weight = los_loss_weight
         self.mortality_loss_weight = mortality_loss_weight
+        self.los_loss_type = los_loss_type
         
-        # LOS loss (multi-class classification)
-        # NOTE: We intentionally compute LOS loss via F.cross_entropy to safely place
-        # class weights on the same device as logits (avoids CPU/GPU mismatch on cluster).
-        self.los_loss = los_loss if los_loss is not None else nn.CrossEntropyLoss()
+        # LOS loss (regression)
+        if los_loss_type == "mse":
+            self.los_loss_fn = nn.MSELoss(reduction='none')
+        elif los_loss_type == "l1" or los_loss_type == "mae":
+            self.los_loss_fn = nn.L1Loss(reduction='none')
+        elif los_loss_type == "huber":
+            self.los_loss_fn = nn.HuberLoss(reduction='none')
+        else:
+            self.los_loss_fn = nn.MSELoss(reduction='none')
         
         # Mortality loss (binary classification)
-        # Store pos_weight as a parameter (will be moved to device in forward)
         self.mortality_use_weighted = mortality_use_weighted
         self.mortality_pos_weight = mortality_pos_weight
-        # We'll use F.binary_cross_entropy directly to handle pos_weight on correct device
     
     def forward(
         self,
-        los_logits: torch.Tensor,
+        los_predictions: torch.Tensor,
         los_labels: torch.Tensor,
         mortality_probs: torch.Tensor,
         mortality_labels: torch.Tensor,
@@ -99,8 +115,8 @@ class MultiTaskLoss(nn.Module):
         """Compute combined multi-task loss.
         
         Args:
-            los_logits: LOS logits of shape (B, num_classes).
-            los_labels: LOS labels of shape (B,).
+            los_predictions: LOS predictions of shape (B, 1) or (B,) - continuous values in days.
+            los_labels: LOS labels of shape (B,) - continuous values in days (float32).
             mortality_probs: Mortality probabilities of shape (B, 1) in range [0, 1].
             mortality_labels: Mortality labels of shape (B,) with values 0 or 1.
         
@@ -110,33 +126,34 @@ class MultiTaskLoss(nn.Module):
                 - 'los': LOS loss (scalar tensor).
                 - 'mortality': Mortality loss (scalar tensor).
         """
-        # Filter valid samples (mortality_label >= 0 means it's available)
-        valid_mask = mortality_labels >= 0
+        # Ensure los_predictions is (B,) for loss computation
+        if los_predictions.dim() > 1:
+            los_predictions = los_predictions.squeeze(-1)
         
-        # LOS loss (always computed if los_labels are valid)
+        # Filter valid samples for LOS (los_label >= 0 means it's available)
+        # For regression, we use a threshold like -1 to indicate invalid
         los_valid_mask = los_labels >= 0
-        if los_valid_mask.any():
-            los_logits_valid = los_logits[los_valid_mask]
-            los_labels_valid = los_labels[los_valid_mask]
-
-            weight = None
-            # If los_loss is CrossEntropyLoss, pull its configured weight and move to device.
-            if isinstance(self.los_loss, nn.CrossEntropyLoss) and getattr(self.los_loss, "weight", None) is not None:
-                weight = self.los_loss.weight.to(device=los_logits_valid.device, dtype=torch.float32)
-
-            los_loss_value = F.cross_entropy(los_logits_valid, los_labels_valid, weight=weight)
-        else:
-            los_loss_value = torch.tensor(0.0, device=los_logits.device)
         
-        # Mortality loss (only computed if mortality labels are available)
-        if valid_mask.any():
+        if los_valid_mask.any():
+            los_predictions_valid = los_predictions[los_valid_mask]
+            los_labels_valid = los_labels[los_valid_mask].float()
+            
+            # Compute LOS regression loss
+            los_loss_per_sample = self.los_loss_fn(los_predictions_valid, los_labels_valid)
+            los_loss_value = los_loss_per_sample.mean()
+        else:
+            los_loss_value = torch.tensor(0.0, device=los_predictions.device)
+        
+        # Filter valid samples for mortality (mortality_label >= 0 means it's available)
+        mortality_valid_mask = mortality_labels >= 0
+        
+        if mortality_valid_mask.any():
             # Ensure mortality_probs and mortality_labels have compatible shapes
-            mortality_probs_flat = mortality_probs.squeeze(1) if mortality_probs.dim() > 1 else mortality_probs
-            mortality_probs_valid = mortality_probs_flat[valid_mask].float()
-            mortality_labels_valid = mortality_labels[valid_mask].float()
+            mortality_probs_flat = mortality_probs.squeeze(-1) if mortality_probs.dim() > 1 else mortality_probs
+            mortality_probs_valid = mortality_probs_flat[mortality_valid_mask].float()
+            mortality_labels_valid = mortality_labels[mortality_valid_mask].float()
             
             # Use F.binary_cross_entropy with manual pos_weight implementation
-            # F.binary_cross_entropy doesn't support pos_weight, so we implement it manually
             if self.mortality_use_weighted and self.mortality_pos_weight is not None:
                 # Manual weighted BCE: loss = -[w_pos * y * log(p) + (1-y) * log(1-p)]
                 pos_weight = torch.tensor(self.mortality_pos_weight, dtype=torch.float32, device=mortality_probs_valid.device)
@@ -177,26 +194,21 @@ def get_multi_task_loss(config: Dict[str, Any]) -> MultiTaskLoss:
     """
     multi_task_config = config.get("multi_task", {})
     training_config = config.get("training", {})
+    data_config = config.get("data", {})
     
     # Get loss weights
     los_loss_weight = multi_task_config.get("los_loss_weight", 1.0)
     mortality_loss_weight = multi_task_config.get("mortality_loss_weight", 1.0)
     
-    # Get LOS loss (can be weighted)
+    # Get LOS loss type (default to MSE for regression)
     los_loss_config = training_config.get("loss", {})
-    los_loss_type = los_loss_config.get("type", "cross_entropy")
-    use_weighted = los_loss_config.get("enabled", True)  # Default: enabled for backward compatibility
+    los_loss_type = los_loss_config.get("type", "mse")
     
-    los_weight = None
-    if use_weighted:
-        los_weight = los_loss_config.get("weight", None)
-        if los_weight is not None:
-            los_weight = torch.tensor(los_weight, dtype=torch.float32)
-    
-    if los_loss_type in ["cross_entropy", "weighted_ce"]:
-        los_loss = nn.CrossEntropyLoss(weight=los_weight)
-    else:
-        los_loss = nn.CrossEntropyLoss()
+    # Check task type - if classification, use cross_entropy compatible loss
+    task_type = data_config.get("task_type", "regression")
+    if task_type == "classification":
+        # For backward compatibility, but we're now using regression
+        los_loss_type = "mse"  # Still use MSE as a fallback
     
     # Get mortality loss settings
     mortality_use_weighted = multi_task_config.get("mortality_use_weighted_loss", False)
@@ -205,7 +217,7 @@ def get_multi_task_loss(config: Dict[str, Any]) -> MultiTaskLoss:
     return MultiTaskLoss(
         los_loss_weight=los_loss_weight,
         mortality_loss_weight=mortality_loss_weight,
-        los_loss=los_loss,
+        los_loss_type=los_loss_type,
         mortality_use_weighted=mortality_use_weighted,
         mortality_pos_weight=mortality_pos_weight,
     )

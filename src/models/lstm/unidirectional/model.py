@@ -1,7 +1,7 @@
-"""Unidirectional LSTM model for ECG classification.
+"""Unidirectional LSTM model for ECG regression/classification.
 
 LSTM architecture for processing 12-lead ECG signals as time series.
-Designed for LOS classification and mortality prediction.
+Designed for LOS regression and mortality prediction.
 """
 
 from typing import Dict, Any, Optional
@@ -11,22 +11,26 @@ from ...core.base_model import BaseECGModel
 
 
 class LSTM1D_Unidirectional(BaseECGModel):
-    """Unidirectional LSTM architecture for ECG classification.
+    """Unidirectional LSTM architecture for ECG regression/classification.
     
-    Architecture:
+    Architecture (Improved):
     - Input Transformation: (B, 12, 5000) → (B, 5000, 12)
-    - Optional: Embedding Layer (12 → hidden_dim)
+    - Optional: Embedding Layer (12 → 64) for better feature representation
     - LSTM Stack:
       * 1-Layer: 128 units (based on Kim et al. 2020)
       * 2-Layer: Layer 1 (128 units), Layer 2 (configurable; default: 128 units)
-    - Pooling: Last hidden state, Mean, or Max pooling
+      * Dropout between layers (default: 0.2)
+    - Pooling: Last hidden state, Mean, or Max pooling (default: "mean")
     - Classification Head: BatchNorm → Dropout → Linear
     
     Input: (B, 12, 5000) - 12 ECG leads, 5000 time steps
-    Output: (B, num_classes) - Classification logits
+    Output: (B, 1) for regression or (B, num_classes) for classification
     
     Based on: Kim et al. 2020 - recommends 128 units for raw ECG signals
-    For 2-layer: Layer 2 hidden size is configurable via `hidden_dim_layer2`.
+    Improved architecture addresses:
+    - Information loss (mean pooling uses all timesteps instead of just last)
+    - Shallow architecture (2-layer LSTM with dropout for hierarchical dependencies)
+    - Limited features (embedding layer increases representation capacity)
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -34,14 +38,16 @@ class LSTM1D_Unidirectional(BaseECGModel):
         
         Args:
             config: Configuration dictionary. Should contain:
-                - num_classes: Number of output classes
+                - num_classes: Number of output classes (ignored for regression)
                 - dropout_rate: Dropout rate (from baseline.yaml)
                 - model: Model-specific parameters:
                     - hidden_dim: Hidden dimension for LSTM Layer 1 (default: 128)
                     - hidden_dim_layer2: Hidden dimension for LSTM Layer 2 (only if num_layers=2; default: hidden_dim)
-                    - num_layers: Number of LSTM layers (default: 1)
-                    - pooling: Pooling strategy ("last", "mean", "max") (default: "last")
-                    - use_embedding: Whether to use embedding layer (default: False)
+                    - num_layers: Number of LSTM layers (default: 2)
+                    - lstm_dropout: Dropout between LSTM layers (default: 0.2)
+                    - pooling: Pooling strategy ("last", "mean", "max") (default: "mean")
+                    - use_embedding: Whether to use embedding layer (default: True)
+                    - embedding_dim: Embedding dimension (default: 64)
         """
         super().__init__(config)
         
@@ -56,29 +62,34 @@ class LSTM1D_Unidirectional(BaseECGModel):
         
         # Get LSTM-specific parameters
         hidden_dim = model_config.get("hidden_dim", 128)
-        num_layers = model_config.get("num_layers", 1)
-        pooling = model_config.get("pooling", "last")
-        use_embedding = model_config.get("use_embedding", False)
+        # Default to 2 layers for improved architecture
+        num_layers = model_config.get("num_layers", 2)
+        pooling = model_config.get("pooling", "mean")  # Mean pooling uses all timesteps
+        use_embedding = model_config.get("use_embedding", True)  # Embedding improves features
         bidirectional = model_config.get("bidirectional", False)
+        lstm_dropout = model_config.get("lstm_dropout", 0.2)
         
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.pooling = pooling
         self.bidirectional = bidirectional
+        self.lstm_dropout = lstm_dropout
         
         # Input: (B, 12, 5000) - 12 leads, 5000 time steps
         input_size = 12  # Number of ECG leads
         
-        # Optional embedding layer
+        # Optional embedding layer (improves feature representation)
+        embedding_dim = model_config.get("embedding_dim", 64)
         if use_embedding:
-            self.embedding = nn.Linear(input_size, hidden_dim)
-            lstm_input_size = hidden_dim
+            self.embedding = nn.Linear(input_size, embedding_dim)
+            lstm_input_size = embedding_dim
         else:
             self.embedding = None
             lstm_input_size = input_size
         
         # For 2-layer LSTM: Layer 1 uses hidden_dim, Layer 2 uses hidden_dim_layer2 (configurable; default: hidden_dim)
         # PyTorch's nn.LSTM doesn't support different hidden_dims per layer, so we need separate layers
+        # Dropout between layers is applied manually
         if num_layers == 1:
             # Single layer LSTM
             self.lstm = nn.LSTM(
@@ -89,6 +100,7 @@ class LSTM1D_Unidirectional(BaseECGModel):
                 bidirectional=bidirectional,
                 dropout=0.0
             )
+            self.lstm_dropout_layer = None
             lstm_output_dim = hidden_dim * (2 if bidirectional else 1)  # 128
         else:
             # Two-layer LSTM: Layer 1 (hidden_dim), Layer 2 (hidden_dim_layer2)
@@ -101,6 +113,8 @@ class LSTM1D_Unidirectional(BaseECGModel):
                 bidirectional=bidirectional,
                 dropout=0.0
             )
+            # Dropout between LSTM layers
+            self.lstm_dropout_layer = nn.Dropout(lstm_dropout)
             self.lstm_layer2 = nn.LSTM(
                 input_size=hidden_dim * (2 if bidirectional else 1),  # 128 (from Layer 1 output)
                 hidden_size=hidden_dim_layer2,
@@ -133,10 +147,13 @@ class LSTM1D_Unidirectional(BaseECGModel):
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
         
-        # Classification Head
+        # Prediction Head
         self.bn_final = nn.BatchNorm1d(feature_dim)
         self.dropout = nn.Dropout(dropout_rate)
-        self.fc = nn.Linear(feature_dim, self.num_classes)
+        
+        # Output layer: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc = nn.Linear(feature_dim, output_dim)
     
     def _pool_lstm_output(self, lstm_output: torch.Tensor) -> torch.Tensor:
         """Pool LSTM output based on configured strategy.
@@ -175,25 +192,27 @@ class LSTM1D_Unidirectional(BaseECGModel):
                                None if diagnosis features are disabled.
         
         Returns:
-            logits: Output logits of shape (B, num_classes)
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
         """
         # Transform input: (B, 12, 5000) → (B, 5000, 12)
         x = x.transpose(1, 2)  # (B, 5000, 12)
         
         # Optional embedding
         if self.embedding is not None:
-            x = self.embedding(x)  # (B, 5000, hidden_dim)
+            x = self.embedding(x)  # (B, T, embedding_dim) or (B, T, hidden_dim)
         
         # LSTM forward pass
         if self.num_layers == 1:
-            lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, 5000, hidden_dim) or (B, 5000, hidden_dim*2)
+            lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, T, hidden_dim) or (B, T, hidden_dim*2)
         else:
-            # Two-layer LSTM
-            lstm_output1, _ = self.lstm_layer1(x)  # (B, 5000, 128)
-            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, 5000, hidden_dim_layer2)
+            # Two-layer LSTM with dropout between layers
+            lstm_output1, _ = self.lstm_layer1(x)  # (B, T, hidden_dim) or (B, T, hidden_dim*2)
+            lstm_output1 = self.lstm_dropout_layer(lstm_output1)  # Apply dropout between layers
+            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, T, hidden_dim_layer2) or (B, T, hidden_dim_layer2*2)
         
         # Pool LSTM output
-        ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim_layer2)
+        ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim*2)
         
         # Late fusion: Concatenate ECG features with demographic and diagnosis features
         fused_features = ecg_features
@@ -205,7 +224,7 @@ class LSTM1D_Unidirectional(BaseECGModel):
         # Classification Head
         x = self.bn_final(fused_features)
         x = self.dropout(x)
-        x = self.fc(x)  # (B, num_classes)
+        x = self.fc(x)  # (B, num_classes) or (B, 1) for regression
         
         return x
     
@@ -233,18 +252,19 @@ class LSTM1D_Unidirectional(BaseECGModel):
         
         # Optional embedding
         if self.embedding is not None:
-            x = self.embedding(x)  # (B, 5000, hidden_dim)
+            x = self.embedding(x)  # (B, T, embedding_dim) or (B, T, hidden_dim)
         
         # LSTM forward pass
         if self.num_layers == 1:
-            lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, 5000, hidden_dim) or (B, 5000, hidden_dim*2)
+            lstm_output, (hidden, cell) = self.lstm(x)  # lstm_output: (B, T, hidden_dim) or (B, T, hidden_dim*2)
         else:
-            # Two-layer LSTM
-            lstm_output1, _ = self.lstm_layer1(x)  # (B, 5000, 128)
-            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, 5000, hidden_dim_layer2)
+            # Two-layer LSTM with dropout between layers
+            lstm_output1, _ = self.lstm_layer1(x)  # (B, T, hidden_dim) or (B, T, hidden_dim*2)
+            lstm_output1 = self.lstm_dropout_layer(lstm_output1)  # Apply dropout between layers
+            lstm_output, _ = self.lstm_layer2(lstm_output1)  # (B, T, hidden_dim_layer2) or (B, T, hidden_dim_layer2*2)
         
         # Pool LSTM output
-        ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim_layer2)
+        ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim*2)
         
         # Late fusion: Concatenate ECG features with demographic and diagnosis features
         fused_features = ecg_features

@@ -8,7 +8,7 @@ import torch.nn as nn
 import numpy as np
 
 from ..data.ecg import create_dataloaders
-from ..data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping, get_num_classes_from_config
+from ..data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
 from .train_loop import evaluate_with_detailed_metrics
 
 
@@ -94,6 +94,9 @@ def evaluate_and_print_results(
 ) -> Dict[str, Any]:
     """Evaluate model on test set and print formatted results.
     
+    For LOS regression task, computes MAE, RMSE, R², and percentile errors.
+    For mortality (multi-task), computes classification metrics.
+    
     Args:
         trainer: Trainer instance with model and criterion.
         test_loader: Test data loader.
@@ -131,85 +134,62 @@ def evaluate_and_print_results(
             "Ensure SLURM_JOB_ID environment variable is set."
         )
     
-    # Get number of classes from config (use los_binning if available, else model.num_classes, else default 10)
-    try:
-        num_classes = get_num_classes_from_config(config)
-    except (KeyError, ValueError):
-        # Fallback to model config or default
-        num_classes = config.get("model", {}).get("num_classes", 10)
-    
     # Evaluate on test set with detailed metrics
     test_metrics = evaluate_with_detailed_metrics(
         model=trainer.model,
         val_loader=test_loader,
         criterion=trainer.criterion,
         device=trainer.device,
-        num_classes=num_classes,
     )
     
     # Print formatted test results summary
     print("\n" + "=" * 80)
-    print("📊 TRAINING RESULTS SUMMARY")
+    print("📊 TRAINING RESULTS SUMMARY (LOS REGRESSION)")
     print("=" * 80)
 
-    # Normalize metric keys (evaluate_with_detailed_metrics returns 'los_*')
-    los_loss = test_metrics.get("los_loss", test_metrics.get("loss", 0.0))
-    los_acc = test_metrics.get("los_accuracy", test_metrics.get("accuracy", 0.0))
-    los_bal_acc = test_metrics.get("los_balanced_accuracy", test_metrics.get("balanced_accuracy", 0.0))
-    los_macro_precision = test_metrics.get("los_macro_precision", test_metrics.get("macro_precision", 0.0))
-    los_macro_recall = test_metrics.get("los_macro_recall", test_metrics.get("macro_recall", 0.0))
-    los_macro_f1 = test_metrics.get("los_macro_f1", test_metrics.get("macro_f1", 0.0))
-    los_per_class_precision = test_metrics.get("los_per_class_precision", test_metrics.get("per_class_precision"))
-    los_per_class_recall = test_metrics.get("los_per_class_recall", test_metrics.get("per_class_recall"))
-    los_per_class_f1 = test_metrics.get("los_per_class_f1", test_metrics.get("per_class_f1"))
-    los_cm = test_metrics.get("los_confusion_matrix", test_metrics.get("confusion_matrix"))
+    # LOS Regression Metrics
+    los_loss = test_metrics.get("los_loss", 0.0)
+    los_mae = test_metrics.get("los_mae", 0.0)
+    los_rmse = test_metrics.get("los_rmse", 0.0)
+    los_r2 = test_metrics.get("los_r2", 0.0)
+    los_median_ae = test_metrics.get("los_median_ae", 0.0)
+    los_p25_error = test_metrics.get("los_p25_error", 0.0)
+    los_p50_error = test_metrics.get("los_p50_error", 0.0)
+    los_p75_error = test_metrics.get("los_p75_error", 0.0)
+    los_p90_error = test_metrics.get("los_p90_error", 0.0)
     
     # Model Performance
     best_val_loss = min(history.get('val_loss', [float('inf')]))
-    print("\n🔹 Model Performance:")
-    print(f"   Best Validation Loss: {best_val_loss:.4f}")
-    print(f"   Test LOS Loss:        {los_loss:.4f}")
-    print(f"   Test LOS Accuracy:    {los_acc:.4f} ({los_acc*100:.2f}%)")
-    print(f"   LOS Balanced Acc:     {los_bal_acc:.4f} ({los_bal_acc*100:.2f}%)")
-    print(f"   LOS Macro Precision:  {los_macro_precision:.4f}")
-    print(f"   LOS Macro Recall:     {los_macro_recall:.4f}")
-    print(f"   LOS Macro F1-Score:   {los_macro_f1:.4f}")
-    print(f"   Test ICU Stays:       {test_metrics.get('num_stays', 0):,}")
+    best_val_mae = min(history.get('val_los_mae', [float('inf')]))
+    best_val_r2 = max(history.get('val_los_r2', [float('-inf')]))
     
-    # Per-class metrics
-    print("\n🔹 Per-Class Metrics:")
-    print(f"   {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
-    print("   " + "-" * 44)
-    for cls in range(num_classes):
-        print(f"   {cls:<8} {los_per_class_precision[cls]:<12.4f} "
-              f"{los_per_class_recall[cls]:<12.4f} "
-              f"{los_per_class_f1[cls]:<12.4f}")
+    print("\n🔹 LOS Regression Performance:")
+    print(f"   Best Validation Loss:  {best_val_loss:.4f}")
+    print(f"   Best Validation MAE:   {best_val_mae:.4f} days")
+    print(f"   Best Validation R²:    {best_val_r2:.4f}")
+    print()
+    print(f"   Test LOS Loss:         {los_loss:.4f}")
+    print(f"   Test LOS MAE:          {los_mae:.4f} days")
+    print(f"   Test LOS RMSE:         {los_rmse:.4f} days")
+    print(f"   Test LOS R²:           {los_r2:.4f}")
+    print(f"   Test LOS Median AE:    {los_median_ae:.4f} days")
+    print(f"   Test ICU Stays:        {test_metrics.get('num_stays', 0):,}")
+    
+    # Error percentile breakdown
+    print("\n🔹 Error Percentiles:")
+    print(f"   25th percentile:       {los_p25_error:.4f} days")
+    print(f"   50th percentile:       {los_p50_error:.4f} days (median)")
+    print(f"   75th percentile:       {los_p75_error:.4f} days")
+    print(f"   90th percentile:       {los_p90_error:.4f} days")
 
     # Mortality summary (multi-task)
     if "mortality_auc" in test_metrics:
-        print("\n🔹 Mortality (overall):")
+        print("\n🔹 Mortality (Binary Classification):")
         print(f"   Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
         print(f"   Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
         print(f"   Recall:    {test_metrics.get('mortality_recall', 0.0):.4f}")
         print(f"   F1:        {test_metrics.get('mortality_f1', 0.0):.4f}")
         print(f"   AUC:       {test_metrics.get('mortality_auc', 0.0):.4f}")
-
-        if "mortality_per_los_class" in test_metrics:
-            print("\n🔹 Mortality per LOS class:")
-            print(f"   {'LOS':<6} {'AUC':<8} {'F1':<8} {'Support':<10}")
-            print("   " + "-" * 34)
-            for los_cls in range(num_classes):
-                m = test_metrics["mortality_per_los_class"].get(los_cls, {})
-                print(f"   {los_cls:<6} {m.get('auc', 0.0):<8.4f} {m.get('f1', 0.0):<8.4f} {m.get('support', 0):<10d}")
-    
-    # Confusion Matrix
-    if los_cm is not None:
-        cm = np.array(los_cm)
-        print("\n🔹 Confusion Matrix:")
-        print("   " + " ".join([f"{i:>6}" for i in range(num_classes)]))
-        for i in range(num_classes):
-            row_str = f"   {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
-            print(row_str)
     
     # Checkpoint info
     print("\n" + "=" * 80)
@@ -222,16 +202,21 @@ def evaluate_and_print_results(
     
     # Add test metrics to history
     history["test_los_loss"] = los_loss
-    history["test_los_acc"] = los_acc
-    history["test_los_balanced_acc"] = los_bal_acc
-    history["test_los_macro_precision"] = los_macro_precision
-    history["test_los_macro_recall"] = los_macro_recall
-    history["test_los_macro_f1"] = los_macro_f1
+    history["test_los_mae"] = los_mae
+    history["test_los_rmse"] = los_rmse
+    history["test_los_r2"] = los_r2
+    history["test_los_median_ae"] = los_median_ae
+    history["test_los_p25_error"] = los_p25_error
+    history["test_los_p50_error"] = los_p50_error
+    history["test_los_p75_error"] = los_p75_error
+    history["test_los_p90_error"] = los_p90_error
     history["test_num_stays"] = test_metrics.get("num_stays", 0)
 
     if "mortality_auc" in test_metrics:
         history["test_mortality_auc"] = test_metrics.get("mortality_auc", 0.0)
         history["test_mortality_acc"] = test_metrics.get("mortality_accuracy", 0.0)
+        history["test_mortality_precision"] = test_metrics.get("mortality_precision", 0.0)
+        history["test_mortality_recall"] = test_metrics.get("mortality_recall", 0.0)
+        history["test_mortality_f1"] = test_metrics.get("mortality_f1", 0.0)
     
     return history
-

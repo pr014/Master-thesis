@@ -1,4 +1,7 @@
-"""Training script for CNN from scratch with LOS bin classification."""
+"""Training script for CNN from scratch with LOS regression.
+
+LOS Regression Task: Predicts continuous LOS in days (not binned classes).
+"""
 
 from pathlib import Path
 import sys
@@ -12,15 +15,18 @@ from src.models import CNNScratch
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
-from src.training import Trainer
+from src.training import Trainer, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function."""
+    """Main training function.
+    
+    LOS Regression Task: Predicts continuous LOS in days.
+    """
     # Load configs
-    # Use baseline_no_aug.yaml for true baseline training (no augmentation, no class weights)
+    # Use baseline_no_aug.yaml for true baseline training (no augmentation)
     base_config_path = Path("configs/icu_24h/baseline_no_aug.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
@@ -36,7 +42,8 @@ def main():
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
-    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
+    print(f"Task: LOS REGRESSION (continuous prediction in days)")
+    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -118,7 +125,7 @@ def main():
     
     # Wrap in MultiTaskECGModel if multi-task is enabled
     if is_multi_task:
-        print("Creating Multi-Task model (LOS + Mortality)...")
+        print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
         model = MultiTaskECGModel(base_model, config)
         print(f"Multi-Task model created with {model.count_parameters():,} parameters")
     else:
@@ -127,10 +134,10 @@ def main():
     # Create loss function
     if is_multi_task:
         criterion = get_multi_task_loss(config)
-        print("Using Multi-Task Loss (LOS + Mortality)")
+        print("Using Multi-Task Loss (LOS MSE + Mortality BCE)")
     else:
         criterion = get_loss(config)
-        print("Using Single-Task Loss (LOS only)")
+        print(f"Using Single-Task Loss (LOS MSE: {type(criterion).__name__})")
     
     # Create trainer
     trainer = Trainer(
@@ -138,7 +145,7 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
-        criterion=criterion,  # Pass custom criterion if multi-task
+        criterion=criterion,
     )
     
     # Store config paths for checkpoint saving
@@ -157,141 +164,14 @@ def main():
     
     print("Training completed!")
     print(f"Best validation loss: {min(history.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE: {min(history.get('val_los_mae', [float('inf')])):.4f} days")
+    print(f"Best validation R²: {max(history.get('val_los_r2', [float('-inf')])):.4f}")
     
-    # Test evaluation (if test_loader is available)
-    if test_loader is not None:
-        print("\n" + "="*60)
-        print("Evaluating on test set...")
-        print("="*60)
-        
-        from src.training.train_loop import evaluate_with_detailed_metrics
-        from src.training.losses import get_loss
-        import numpy as np
-        
-        # Load best model checkpoint (use job_id version if available)
-        checkpoint_dir = Path(config.get("checkpoint", {}).get("save_dir", "outputs/checkpoints"))
-        model_name = config.get("model", {}).get("type", "model")
-        
-        # Load checkpoint with job_id (required for traceability)
-        if trainer.job_id:
-            best_model_path = checkpoint_dir / f"{model_name}_best_{trainer.job_id}.pt"
-            if best_model_path.exists():
-                print(f"Loading best model from: {best_model_path}")
-                checkpoint = torch.load(best_model_path, map_location=trainer.device)
-                model.load_state_dict(checkpoint["model_state_dict"])
-                print(f"Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
-            else:
-                print(f"Warning: Best model checkpoint not found at {best_model_path}. Using current model state.")
-        else:
-            raise ValueError(
-                "No job_id available. Cannot load checkpoint without job_id for traceability. "
-                "Ensure SLURM_JOB_ID environment variable is set."
-            )
-        
-        # Get number of classes from config
-        num_classes = config.get("model", {}).get("num_classes", 10)
-        
-        # Evaluate on test set with detailed metrics
-        # Use the criterion from trainer (already has weights on correct device)
-        test_metrics = evaluate_with_detailed_metrics(
-            model=trainer.model,
-            val_loader=test_loader,
-            criterion=trainer.criterion,
-            device=trainer.device,
-            num_classes=num_classes,
-        )
-        
-        # Print formatted test results summary
-        print("\n" + "=" * 80)
-        print("📊 TRAINING RESULTS SUMMARY")
-        print("=" * 80)
-
-        # Normalize metric keys (evaluate_with_detailed_metrics returns 'los_*')
-        los_loss = test_metrics.get("los_loss", test_metrics.get("loss", 0.0))
-        los_acc = test_metrics.get("los_accuracy", test_metrics.get("accuracy", 0.0))
-        los_bal_acc = test_metrics.get("los_balanced_accuracy", test_metrics.get("balanced_accuracy", 0.0))
-        los_macro_precision = test_metrics.get("los_macro_precision", test_metrics.get("macro_precision", 0.0))
-        los_macro_recall = test_metrics.get("los_macro_recall", test_metrics.get("macro_recall", 0.0))
-        los_macro_f1 = test_metrics.get("los_macro_f1", test_metrics.get("macro_f1", 0.0))
-        los_per_class_precision = test_metrics.get("los_per_class_precision", test_metrics.get("per_class_precision"))
-        los_per_class_recall = test_metrics.get("los_per_class_recall", test_metrics.get("per_class_recall"))
-        los_per_class_f1 = test_metrics.get("los_per_class_f1", test_metrics.get("per_class_f1"))
-        los_cm = test_metrics.get("los_confusion_matrix", test_metrics.get("confusion_matrix"))
-        
-        # Model Performance
-        best_val_loss = min(history.get('val_loss', [float('inf')]))
-        print("\n🔹 Model Performance:")
-        print(f"   Best Validation Loss: {best_val_loss:.4f}")
-        print(f"   Test LOS Loss:        {los_loss:.4f}")
-        print(f"   Test LOS Accuracy:    {los_acc:.4f} ({los_acc*100:.2f}%)")
-        print(f"   LOS Balanced Acc:     {los_bal_acc:.4f} ({los_bal_acc*100:.2f}%)")
-        print(f"   LOS Macro Precision:  {los_macro_precision:.4f}")
-        print(f"   LOS Macro Recall:     {los_macro_recall:.4f}")
-        print(f"   LOS Macro F1-Score:   {los_macro_f1:.4f}")
-        print(f"   Test ICU Stays:       {test_metrics.get('num_stays', 0):,}")
-        
-        # Per-class metrics
-        print("\n🔹 Per-Class Metrics:")
-        print(f"   {'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
-        print("   " + "-" * 44)
-        for cls in range(num_classes):
-            print(f"   {cls:<8} {los_per_class_precision[cls]:<12.4f} "
-                  f"{los_per_class_recall[cls]:<12.4f} "
-                  f"{los_per_class_f1[cls]:<12.4f}")
-
-        # Mortality summary (multi-task)
-        if "mortality_auc" in test_metrics:
-            print("\n🔹 Mortality (overall):")
-            print(f"   Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
-            print(f"   Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
-            print(f"   Recall:    {test_metrics.get('mortality_recall', 0.0):.4f}")
-            print(f"   F1:        {test_metrics.get('mortality_f1', 0.0):.4f}")
-            print(f"   AUC:       {test_metrics.get('mortality_auc', 0.0):.4f}")
-
-            if "mortality_per_los_class" in test_metrics:
-                print("\n🔹 Mortality per LOS class:")
-                print(f"   {'LOS':<6} {'AUC':<8} {'F1':<8} {'Support':<10}")
-                print("   " + "-" * 34)
-                for los_cls in range(num_classes):
-                    m = test_metrics["mortality_per_los_class"].get(los_cls, {})
-                    print(f"   {los_cls:<6} {m.get('auc', 0.0):<8.4f} {m.get('f1', 0.0):<8.4f} {m.get('support', 0):<10d}")
-        
-        # Confusion Matrix
-        if los_cm is not None:
-            cm = np.array(los_cm)
-            print("\n🔹 Confusion Matrix:")
-            print("   " + " ".join([f"{i:>6}" for i in range(num_classes)]))
-            for i in range(num_classes):
-                row_str = f"   {i} " + " ".join([f"{cm[i,j]:>6}" for j in range(num_classes)])
-                print(row_str)
-        
-        # Checkpoint info
-        print("\n" + "=" * 80)
-        if trainer.job_id:
-            checkpoint_path = f"outputs/checkpoints/{model_name}_best_{trainer.job_id}.pt"
-            print(f"✅ Checkpoints: {checkpoint_path}")
-        else:
-            print("✅ Checkpoints: outputs/checkpoints/<MODEL_NAME>_best_<JOB_ID>.pt")
-        print("=" * 80)
-        
-        # Add test metrics to history
-        history["test_los_loss"] = los_loss
-        history["test_los_acc"] = los_acc
-        history["test_los_balanced_acc"] = los_bal_acc
-        history["test_los_macro_precision"] = los_macro_precision
-        history["test_los_macro_recall"] = los_macro_recall
-        history["test_los_macro_f1"] = los_macro_f1
-        history["test_num_stays"] = test_metrics.get("num_stays", 0)
-
-        if "mortality_auc" in test_metrics:
-            history["test_mortality_auc"] = test_metrics.get("mortality_auc", 0.0)
-            history["test_mortality_acc"] = test_metrics.get("mortality_accuracy", 0.0)
-    else:
-        print("\nWarning: No test loader available. Skipping test evaluation.")
+    # Test evaluation
+    history = evaluate_and_print_results(trainer, test_loader, history, config)
     
     return history
 
 
 if __name__ == "__main__":
     main()
-

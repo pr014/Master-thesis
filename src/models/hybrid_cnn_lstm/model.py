@@ -1,4 +1,4 @@
-"""Hybrid CNN-LSTM model for ECG classification."""
+"""Hybrid CNN-LSTM model for ECG regression/classification."""
 
 from typing import Dict, Any, Optional
 import torch
@@ -8,7 +8,7 @@ from ..core.base_model import BaseECGModel
 
 
 class HybridCNNLSTM(BaseECGModel):
-    """Hybrid CNN-LSTM architecture for ECG classification.
+    """Hybrid CNN-LSTM architecture for ECG regression/classification.
 
     Architecture:
     - Input: (B, 12, 5000)
@@ -17,7 +17,7 @@ class HybridCNNLSTM(BaseECGModel):
     - Pooling: last timestep
     - Late fusion with demographics (optional)
     - Shared layer: BN → Dropout → Dense(64) → ReLU → Dropout
-    - Output: LOS logits (B, num_classes)
+    - Output: LOS prediction (B, 1) for regression or (B, num_classes) for classification
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -25,10 +25,6 @@ class HybridCNNLSTM(BaseECGModel):
 
         training_config = config.get("training", {})
         dropout_rate = training_config.get("dropout_rate", 0.3)
-
-        model_config = config.get("model", {})
-        num_classes = model_config.get("num_classes", self.num_classes)
-        self.num_classes = num_classes
 
         # CNN hyperparameters (defaults follow the requested architecture)
         conv1_out = model_config.get("conv1_out", 32)
@@ -142,8 +138,9 @@ class HybridCNNLSTM(BaseECGModel):
         self.fc_shared = nn.Linear(feature_dim, 64)
         self.dropout_out = nn.Dropout(dropout_rate)
 
-        # LOS head
-        self.fc_los = nn.Linear(64, self.num_classes)
+        # LOS head: 1 neuron for regression, num_classes for classification
+        output_dim = 1 if self.task_type == "regression" else (self.num_classes or 10)
+        self.fc_los = nn.Linear(64, output_dim)
 
     def _pool_lstm_output(self, lstm_output: torch.Tensor) -> torch.Tensor:
         """Pool LSTM output based on configured strategy."""
@@ -217,7 +214,12 @@ class HybridCNNLSTM(BaseECGModel):
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        """Forward pass returning LOS logits."""
+        """Forward pass returning LOS prediction.
+        
+        Returns:
+            For regression: Output tensor of shape (B, 1) - continuous LOS in days
+            For classification: Output logits of shape (B, num_classes)
+        """
         features = self._forward_features(x, demographic_features=demographic_features, diagnosis_features=diagnosis_features)
         return self.fc_los(features)
 

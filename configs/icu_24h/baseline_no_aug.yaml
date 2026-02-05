@@ -1,5 +1,5 @@
-# Baseline configuration WITHOUT augmentation for true baseline training
-# This is a copy of baseline.yaml but with augmentation disabled
+# Baseline configuration WITHOUT augmentation for LOS REGRESSION
+# This config is set up for predicting continuous LOS values (in days)
 # Used specifically for train_cnn_scratch.py (baseline model without augmentation)
 
 # Random seed for reproducibility (same across all models)
@@ -17,10 +17,9 @@ data:
   window_seconds: 10.0  # seconds
   num_leads: 12  # 12-lead ECG
   
-  # LOS binning strategy
-  los_binning:
-    strategy: "exact_days"  # "intervals" (old 10-class) or "exact_days" (new, e.g., 8-class)
-    max_days: 7  # Only used for "exact_days" strategy (default: 9) - 7 = 8 classes
+  # LOS task type: REGRESSION
+  # LOS values are continuous (days), not binned into classes
+  los_task: "regression"  # "regression" or "classification"
   
   # Preprocessing (same for all models)
   # Pipeline order: Resampling → Bandpass Filtering → Segmentation → Normalization
@@ -46,6 +45,14 @@ data:
     # Future options (not implemented yet):
     # time_warping: false
     # lead_dropout: false
+  
+  # Demographic features (Age & Sex) - DISABLED for baseline
+  demographic_features:
+    enabled: false
+  
+  # Diagnosis features - DISABLED for baseline
+  diagnosis_features:
+    enabled: false
 
 # Training hyperparameters (same for all models for fair comparison)
 training:
@@ -74,11 +81,10 @@ training:
     patience: 5
     min_lr: 1e-6
   
-  # Loss function (same for all models)
+  # Loss function - MSE for LOS REGRESSION
   loss:
-    type: "cross_entropy"  # "cross_entropy", "focal", "weighted_ce"
-    enabled: false  # Disable class weights (use standard cross_entropy)
-    # Add loss-specific parameters here if needed
+    type: "mse"  # "mse" (Mean Squared Error) or "l1" (Mean Absolute Error) for regression
+    # Note: For classification tasks, use "cross_entropy", "focal", or "weighted_ce"
 
 # Validation settings (same for all models)
 validation:
@@ -92,10 +98,10 @@ test_split: 0.1  # Fraction of data for testing (10% for 80-10-10 split)
 early_stopping:
   enabled: true
   patience: 7
-  monitor: "val_loss"  # Options: "val_loss" or "val_auc" (use "val_auc" for mortality, "val_loss" for regression)
-  mode: "min"  # "min" for loss, "max" for AUC
+  monitor: "val_loss"  # Options: "val_loss", "val_los_mae" for regression
+  mode: "min"  # "min" for loss/MAE
   # Note: For mortality prediction, monitor "val_auc" with mode "max"
-  # For length of stay, monitor "val_loss" (RMSE/MAE) with mode "min"
+  # For length of stay REGRESSION, monitor "val_loss" or "val_los_mae" with mode "min"
 
 # Checkpointing (same for all models)
 checkpoint:
@@ -110,22 +116,22 @@ logging:
   use_tensorboard: true
   log_frequency: 10  # Log every N batches
 
-# Evaluation metrics (same for all models)
+# Evaluation metrics for REGRESSION
 evaluation:
   metrics:
-    - "accuracy"
-    - "f1_score"
-    - "precision"
-    - "recall"
-    - "auc_roc"
-    - "auc_pr"
+    - "mae"  # Mean Absolute Error
+    - "rmse"  # Root Mean Squared Error
+    - "r2"  # R² Score
+    - "median_ae"  # Median Absolute Error
+    # Mortality metrics (binary classification)
+    - "accuracy"  # For mortality
+    - "auc_roc"  # For mortality
 
-# Multi-task learning settings (LOS + Mortality)
+# Multi-task learning settings (LOS Regression + Mortality Classification)
 multi_task:
   enabled: true
   admissions_path: "data/labeling/labels_csv/admissions.csv"  # Path to admissions.csv for mortality labels
-  los_loss_weight: 1.0  # Weight for LOS classification loss
-  mortality_loss_weight: 1.0  # Weight for mortality prediction loss
+  los_loss_weight: 1.0  # Weight for LOS REGRESSION loss (MSE)
+  mortality_loss_weight: 1.0  # Weight for mortality prediction loss (BCE)
   mortality_use_weighted_loss: false  # Use weighted BCE for mortality (if class imbalance)
   mortality_pos_weight: null  # Positive class weight for mortality (auto-calculated if null and weighted_loss=true)
-

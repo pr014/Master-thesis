@@ -1,6 +1,6 @@
-"""Training script for EfficientNet1D-B1 with LOS bin classification.
-This script uses class weights specifically calculated for the 24h ECG dataset.
-Config: configs/icu_24h/output/weighted_exact_days.yaml (exact_days, 8 classes)
+"""Training script for EfficientNet1D-B1 with LOS regression.
+
+LOS Regression Task: Predicts continuous LOS in days (not binned classes).
 """
 
 from pathlib import Path
@@ -14,15 +14,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from src.models import EfficientNet1D_B1
 from src.models import MultiTaskECGModel
 from src.data.ecg import create_dataloaders
-from src.data.labeling import get_num_classes_from_config
 from src.training import Trainer, setup_icustays_mapper, evaluate_and_print_results
 from src.training.losses import get_loss, get_multi_task_loss
 from src.utils.config_loader import load_config
 
 
 def main():
-    """Main training function for 24h dataset with class weights."""
-    # Load configs - using exact_days config (8 classes)
+    """Main training function for 24h dataset.
+    
+    LOS Regression Task: Predicts continuous LOS in days.
+    """
+    # Load configs
     base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/efficientnet1d/efficientnet1d_b1_scratch.yaml")
     
@@ -38,26 +40,17 @@ def main():
         experiment_config_path=feature_config_path,
     )
     
-    # Override num_classes from los_binning to ensure model uses correct number of classes
-    # This makes the script flexible for different los_binning strategies
-    num_classes = get_num_classes_from_config(config)
-    config["model"]["num_classes"] = num_classes
-    
     print("="*60)
-    print("Training EfficientNet1D-B1 with Class Weights for 24h Dataset (Exact Days, 8 Classes)")
+    print("Training EfficientNet1D-B1 for 24h Dataset")
+    print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
     print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     if feature_config_path:
         print(f"Feature config: {feature_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
-    print(f"Number of classes: {num_classes}")
-    los_binning = config.get('data', {}).get('los_binning', {})
-    print(f"LOS binning: strategy={los_binning.get('strategy', 'unknown')}, max_days={los_binning.get('max_days', 'N/A')}")
-    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
-    if 'weight' in config.get('training', {}).get('loss', {}):
-        weights = config.get('training', {}).get('loss', {}).get('weight', [])
-        print(f"Class weights: {weights}")
+    print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
+    
     pretrained_config = config.get('model', {}).get('pretrained', {})
     if pretrained_config.get('enabled', False):
         print(f"Pretrained weights: {pretrained_config.get('weights_path', 'N/A')}")
@@ -101,7 +94,7 @@ def main():
     
     # Wrap in MultiTaskECGModel if multi-task is enabled
     if is_multi_task:
-        print("Creating Multi-Task model (LOS + Mortality)...")
+        print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
         model = MultiTaskECGModel(base_model, config)
         print(f"Multi-Task model created with {model.count_parameters():,} parameters")
     else:
@@ -110,10 +103,10 @@ def main():
     # Create loss function
     if is_multi_task:
         criterion = get_multi_task_loss(config)
-        print("Using Multi-Task Loss (LOS + Mortality)")
+        print("Using Multi-Task Loss (LOS MSE + Mortality BCE)")
     else:
         criterion = get_loss(config)
-        print("Using Single-Task Loss (LOS only)")
+        print(f"Using Single-Task Loss (LOS MSE: {type(criterion).__name__})")
     
     # Create trainer
     trainer = Trainer(
@@ -140,8 +133,10 @@ def main():
     
     print("Training completed!")
     print(f"Best validation loss: {min(history.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE: {min(history.get('val_los_mae', [float('inf')])):.4f} days")
+    print(f"Best validation R²: {max(history.get('val_los_r2', [float('-inf')])):.4f}")
     
-    # Test evaluation (if test_loader is available)
+    # Test evaluation
     history = evaluate_and_print_results(trainer, test_loader, history, config)
     
     return history
@@ -149,4 +144,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

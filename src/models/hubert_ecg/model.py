@@ -1,40 +1,43 @@
-"""DeepECG-SL (WCR) model with self-supervised pretraining for multi-task learning.
+"""HuBERT-ECG model with self-supervised pretraining for multi-task learning.
 
-Supports both regression (LOS in days) and classification tasks.
+Architecture follows the original ecg-fm-benchmarking repository:
+https://github.com/HeartWise-AI/ecg-fm-benchmarking
+
+Adapted for multi-task learning (LOS regression + Mortality prediction).
 """
 
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 
 from ..core.base_model import BaseECGModel
-from .input_adapter import InputAdapter
-from .wcr_encoder import WCREncoder
+from .encoder import HuBERTEncoder
 
 
-class DeepECG_SL(BaseECGModel):
-    """DeepECG-SL model with WCR Transformer Encoder for multi-task learning.
+class HuBERT_ECG(BaseECGModel):
+    """HuBERT-ECG model for multi-task learning (LOS regression + Mortality).
     
-    Architecture:
+    Architecture follows HuBERTForECGClassification from original repo:
     - Input: (B, 12, 5000) ECG signals @ 500Hz
-    - Input Adapter: Conv1D (5000 → 2500)
-    - WCR Encoder: Pretrained Transformer (2500 → seq_len, 768)
-    - Global Pooling: (seq_len, 768) → (768)
-    - Late Fusion: Concat([ECG(768), demographics(2), diagnoses(N)])
-    - Shared Layers: BN → Dropout → FC(770+N → 128) → ReLU → Dropout
-    - LOS Head: FC(128 → 1) for regression (continuous LOS in days)
-    - Mortality Head: FC(128 → 1) + Sigmoid
+    - HuBERT Encoder: Pretrained Transformer with mean pooling -> (B, 768)
+    - Classifier dropout (following original repo)
+    - Late Fusion: Concat([ECG(768), demographics(2), diagnoses(N)]) [optional]
+    - LOS Head: FC(feature_dim -> 1) for regression (continuous LOS in days)
+    - Mortality Head: FC(feature_dim -> 1) + Sigmoid
+    
+    Output format for multi-task:
+    - 'los': LOS regression prediction (continuous value in days)
+    - 'mortality': Mortality probability
     """
     
     def __init__(self, config: Dict[str, Any]):
-        """Initialize DeepECG-SL model.
+        """Initialize HuBERT-ECG model.
         
         Args:
             config: Configuration dictionary. Should contain:
-                - model.wcr.*: WCR encoder configuration
-                - model.input_adapter.*: Input adapter configuration
+                - model.hubert.*: HuBERT encoder configuration
                 - model.pretrained.*: Pretrained weights configuration
-                - training.dropout_rate: Dropout rate for shared layers
+                - training.dropout_rate: Dropout rate for classifier
                 - data.demographic_features.enabled: Whether to use demographics
                 - data.diagnosis_features.enabled: Whether to use diagnoses
                 - data.task_type: "regression" (default) or "classification"
@@ -43,14 +46,15 @@ class DeepECG_SL(BaseECGModel):
         
         # Get training config
         training_config = config.get("training", {})
-        dropout_rate = training_config.get("dropout_rate", 0.3)
+        # Use classifier_dropout_prob from original repo (default: 0.1)
+        dropout_rate = training_config.get("dropout_rate", 0.1)
         
         # Get model config
         model_config = config.get("model", {})
         
-        # Get feature dimensions (default: 768 for WCR encoder)
+        # Get feature dimensions
+        # HuBERT hidden_size = 768
         feature_dim = model_config.get("feature_dim", 768)
-        shared_dim = model_config.get("shared_dim", 128)
         
         # Check demographic and diagnosis features
         data_config = config.get("data", {})
@@ -64,15 +68,10 @@ class DeepECG_SL(BaseECGModel):
         
         # Determine device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = device
         
-        # Input Adapter: (B, 12, 5000) → (B, 12, 2500)
-        self.input_adapter = InputAdapter(config)
-        
-        # WCR Encoder: (B, 12, 2500) → (B, seq_len, 768)
-        self.wcr_encoder = WCREncoder(config, device=device)
-        
-        # Global Average Pooling: (B, seq_len, 768) → (B, 768)
-        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        # HuBERT Encoder: (B, 12, 5000) -> (B, 768) with mean pooling
+        self.hubert_encoder = HuBERTEncoder(config, device=device)
         
         # Calculate feature dimension after fusion
         fused_feature_dim = feature_dim
@@ -83,43 +82,34 @@ class DeepECG_SL(BaseECGModel):
         if self.use_diagnoses:
             fused_feature_dim += diagnosis_dim
         
-        # Shared layers
-        self.shared_bn = nn.BatchNorm1d(fused_feature_dim)
-        self.shared_dropout1 = nn.Dropout(dropout_rate)
-        self.shared_fc = nn.Linear(fused_feature_dim, shared_dim)
-        self.shared_relu = nn.ReLU()
-        self.shared_dropout2 = nn.Dropout(dropout_rate)
+        # Classifier dropout (following HuBERTForECGClassification)
+        self.classifier_dropout = nn.Dropout(dropout_rate)
         
-        # Task heads
+        # Task-specific heads (following original: simple linear classifier without hidden layer)
         # LOS Head: Output 1 value for regression (continuous LOS in days)
-        self.los_head = nn.Linear(shared_dim, 1)
-        self.mortality_head = nn.Linear(shared_dim, 1)
+        self.los_head = nn.Linear(fused_feature_dim, 1)
+        self.mortality_head = nn.Linear(fused_feature_dim, 1)
         
         # Move all layers to the correct device
-        self.shared_bn = self.shared_bn.to(device)
-        self.shared_fc = self.shared_fc.to(device)
+        self.classifier_dropout = self.classifier_dropout.to(device)
         self.los_head = self.los_head.to(device)
         self.mortality_head = self.mortality_head.to(device)
         
         # Initialize freeze state based on config
-        wcr_config = model_config.get("wcr", {})
-        freeze_backbone = wcr_config.get("freeze_backbone", True)
+        hubert_config = model_config.get("hubert", {})
+        freeze_backbone = hubert_config.get("freeze_backbone", True)
         if freeze_backbone:
             self.freeze_backbone()
         else:
             self.unfreeze_backbone()
     
     def freeze_backbone(self) -> None:
-        """Freeze WCR encoder and input adapter (for transfer learning Phase 1)."""
-        self.wcr_encoder.freeze()
-        for param in self.input_adapter.parameters():
-            param.requires_grad = False
+        """Freeze HuBERT encoder (for transfer learning Phase 1)."""
+        self.hubert_encoder.freeze()
     
     def unfreeze_backbone(self) -> None:
-        """Unfreeze WCR encoder and input adapter (for fine-tuning Phase 2)."""
-        self.wcr_encoder.unfreeze()
-        for param in self.input_adapter.parameters():
-            param.requires_grad = True
+        """Unfreeze HuBERT encoder (for fine-tuning Phase 2)."""
+        self.hubert_encoder.unfreeze()
     
     def _forward_features(
         self,
@@ -135,26 +125,12 @@ class DeepECG_SL(BaseECGModel):
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             
         Returns:
-            Features tensor of shape (B, shared_dim)
+            Features tensor of shape (B, fused_feature_dim)
         """
-        # Input Adapter: (B, 12, 5000) → (B, 12, 2500)
-        x = self.input_adapter(x)
+        # HuBERT Encoder: (B, 12, 5000) -> (B, 768) with mean pooling
+        x = self.hubert_encoder(x)  # (B, 768)
         
-        # WCR Encoder: (B, 12, 2500) → (B, seq_len, 768)
-        # fairseq-signals expects (B, channels, seq_len) format = (B, 12, 2500)
-        # The encoder internally transposes after feature extraction
-        encoder_out = self.wcr_encoder(x)  # (B, seq_len, 768)
-        
-        # Global Average Pooling: (B, seq_len, 768) → (B, 768, 1)
-        # Transpose for pooling: (B, seq_len, 768) → (B, 768, seq_len)
-        encoder_out = encoder_out.transpose(1, 2)  # (B, 768, seq_len)
-        x = self.global_pool(encoder_out)  # (B, 768, 1)
-        
-        # Squeeze: (B, 768, 1) → (B, 768)
-        x = x.squeeze(-1)  # (B, 768)
-        
-        # Late fusion with demographics and diagnoses
-        # Ensure all tensors are on the same device
+        # Late fusion with demographics and diagnoses (optional)
         if self.use_demographics and demographic_features is not None:
             demographic_features = demographic_features.to(x.device)
             x = torch.cat([x, demographic_features], dim=1)
@@ -162,23 +138,17 @@ class DeepECG_SL(BaseECGModel):
             diagnosis_features = diagnosis_features.to(x.device)
             x = torch.cat([x, diagnosis_features], dim=1)
         
-        # Shared layer
-        # BatchNorm expects (B, C) for 1D
-        if x.dim() == 2:
-            x = self.shared_bn(x)  # (B, 768+2+diagnosis_dim) or (B, 768)
-        x = self.shared_dropout1(x)
-        x = self.shared_fc(x)  # (B, 128)
-        x = self.shared_relu(x)
-        x = self.shared_dropout2(x)
+        # Classifier dropout (following HuBERTForECGClassification line 117)
+        x = self.classifier_dropout(x)
         
-        return x  # (B, 128)
+        return x  # (B, fused_feature_dim)
     
     def forward(
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Dict[str, torch.Tensor]:
         """Forward pass returning LOS prediction and mortality probabilities.
         
         Args:
@@ -187,9 +157,9 @@ class DeepECG_SL(BaseECGModel):
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             
         Returns:
-            Tuple of:
-                - los_predictions: LOS regression output of shape (B, 1) - continuous LOS in days
-                - mortality_probs: Mortality probabilities of shape (B, 1)
+            Dictionary with:
+                - 'los': LOS regression output of shape (B, 1) - continuous LOS in days
+                - 'mortality': Mortality probabilities of shape (B, 1)
         """
         # Extract features
         features = self._forward_features(
@@ -198,12 +168,15 @@ class DeepECG_SL(BaseECGModel):
             diagnosis_features=diagnosis_features
         )
         
-        # Task-specific heads
+        # Task-specific heads (simple linear without activation for regression)
         los_predictions = self.los_head(features)  # (B, 1) - continuous LOS in days
         mortality_logits = self.mortality_head(features)  # (B, 1)
         mortality_probs = torch.sigmoid(mortality_logits)  # (B, 1)
         
-        return los_predictions, mortality_probs
+        return {
+            "los": los_predictions,
+            "mortality": mortality_probs
+        }
     
     def get_features(
         self,
@@ -219,7 +192,7 @@ class DeepECG_SL(BaseECGModel):
             diagnosis_features: Optional diagnosis features
             
         Returns:
-            Features tensor of shape (B, shared_dim)
+            Features tensor of shape (B, fused_feature_dim)
         """
         return self._forward_features(
             x,

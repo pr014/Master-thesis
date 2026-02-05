@@ -1,19 +1,26 @@
 # DeepECG-SL (WCR) model-specific configuration
 # Self-supervised pretrained model with Transfer Learning
+# Based on: https://github.com/HeartWise-AI/DeepECG_Docker
+# WCR = Wav2Vec2 with Contrastive Multi-view Coding (CMSC)
 
 model:
   type: "DeepECG_SL"
   num_classes: 8  # Will be overridden by los_binning config (exact_days with max_days=7)
   
   # WCR Encoder Configuration
+  # Architecture from fairseq-signals:
+  # - 4 Conv layers [(256, 2, 2)] for feature extraction
+  # - 12 Transformer encoder layers with embed_dim=768
   wcr:
     model_name: "wcr_77_classes"
     huggingface_repo: "heartwise/wcr_77_classes"
     base_ssl_path: "base_ssl.pt"
-    d_model: 512                    # Hidden dimension from checkpoint
-    freeze_backbone: true           # Initial freeze for transfer learning
+    d_model: 768                    # Transformer encoder embed dimension (from checkpoint)
+    freeze_backbone: false          # Start with unfrozen encoder (Phase 1 skipped)
     
   # Input Adapter Configuration
+  # WCR expects (B, 12, 2500) input format
+  # Our data is (B, 12, 5000) @ 500Hz, need to downsample to 2500
   input_adapter:
     type: "conv1d"                  # conv1d, linear, or pooling
     in_length: 5000
@@ -28,6 +35,6 @@ model:
     # API Key from environment variable HUGGINGFACE_API_KEY
     
   # Feature dimensions
-  feature_dim: 512                  # Output from WCR encoder
+  feature_dim: 768                  # Output from WCR encoder (encoder_embed_dim)
   shared_dim: 128                   # Shared layer dimension
 
