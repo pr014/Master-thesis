@@ -26,6 +26,11 @@ data:
   # LOS values are continuous (days), not binned into classes
   los_task: "regression"  # "regression" or "classification"
   
+  # Data splitting strategy (temporal split only)
+  split_strategy: "temporal_stratified"  # "temporal" or "temporal_stratified"
+  # temporal: Time-based split (train=oldest, test=newest)
+  # temporal_stratified: Time-based split with LOS stratification within segments
+  
   # Preprocessing (same for all models)
   # Pipeline order: Resampling → Bandpass Filtering → Segmentation → Normalization
   preprocessing:
