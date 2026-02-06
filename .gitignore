@@ -32,8 +32,9 @@ outputs/
 *.hdf5
 
 # Data (große Datensätze nicht ins Repo)
-# Ignoriere den gesamten data/ Ordner (enthält große Datensätze)
-data/
+# Ignoriere den gesamten data/ Ordner im Root (enthält große Datensätze)
+# /data/ matched nur data/ im Root, nicht src/data/
+/data/
 
 # Große Daten-Dateien (aber kleine Config/Code-Dateien bleiben erhalten)
 *.npy
