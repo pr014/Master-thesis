@@ -24,28 +24,15 @@ def main():
     
     LOS Regression Task: Predicts continuous LOS in days.
     """
-    # Load configs
-    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
+    # Load config (standalone model config with all parameters)
     model_config_path = Path("configs/model/xresnet1d_101/xresnet1d_101_pretrained.yaml")
     
-    # Optional: Load demographic features config
-    # Set to None to disable demographic features
-    feature_config_path = Path("configs/features/demographic_features.yaml")
-    if not feature_config_path.exists():
-        feature_config_path = None
-        print("Note: Demographic features config not found. Training without Age & Sex features.")
-    
-    config = load_config(
-        base_config_path=base_config_path,
-        model_config_path=model_config_path,
-        experiment_config_path=feature_config_path,  # Optional feature config
-    )
+    config = load_config(model_config_path=model_config_path)
     
     print("="*60)
     print("Training FastAI xResNet1D-101 for 24h Dataset")
     print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
-    print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
@@ -118,7 +105,6 @@ def main():
     
     # Store config paths for checkpoint saving
     trainer.config_paths = {
-        "base": str(base_config_path.resolve()),
         "model": str(model_config_path.resolve()),
     }
     

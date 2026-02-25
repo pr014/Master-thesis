@@ -150,6 +150,7 @@ def evaluate_and_print_results(
     # LOS Regression Metrics
     los_loss = test_metrics.get("los_loss", 0.0)
     los_mae = test_metrics.get("los_mae", 0.0)
+    los_mse = test_metrics.get("los_mse", 0.0)
     los_rmse = test_metrics.get("los_rmse", 0.0)
     los_r2 = test_metrics.get("los_r2", 0.0)
     los_median_ae = test_metrics.get("los_median_ae", 0.0)
@@ -170,6 +171,7 @@ def evaluate_and_print_results(
     print()
     print(f"   Test LOS Loss:         {los_loss:.4f}")
     print(f"   Test LOS MAE:          {los_mae:.4f} days")
+    print(f"   Test LOS MSE:          {los_mse:.4f} days²")
     print(f"   Test LOS RMSE:         {los_rmse:.4f} days")
     print(f"   Test LOS R²:           {los_r2:.4f}")
     print(f"   Test LOS Median AE:    {los_median_ae:.4f} days")
@@ -203,6 +205,7 @@ def evaluate_and_print_results(
     # Add test metrics to history
     history["test_los_loss"] = los_loss
     history["test_los_mae"] = los_mae
+    history["test_los_mse"] = los_mse
     history["test_los_rmse"] = los_rmse
     history["test_los_r2"] = los_r2
     history["test_los_median_ae"] = los_median_ae

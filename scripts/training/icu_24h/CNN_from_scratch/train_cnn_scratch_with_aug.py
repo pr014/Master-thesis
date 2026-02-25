@@ -19,21 +19,15 @@ from src.utils.config_loader import load_config
 
 def main():
     """Main training function."""
-    # Load configs
-    # Use baseline_with_aug.yaml for training WITH augmentation
-    base_config_path = Path("configs/icu_24h/baseline_with_aug.yaml")
+    # Load config (standalone model config with all parameters)
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
-    config = load_config(
-        base_config_path=base_config_path,
-        model_config_path=model_config_path,
-    )
+    config = load_config(model_config_path=model_config_path)
     
     # Log config paths for tracking
     print("="*60)
     print("Training Configuration")
     print("="*60)
-    print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'unknown')}")
@@ -144,7 +138,6 @@ def main():
     
     # Store config paths for checkpoint saving
     trainer.config_paths = {
-        "base": str(base_config_path.resolve()),
         "model": str(model_config_path.resolve()),
     }
     

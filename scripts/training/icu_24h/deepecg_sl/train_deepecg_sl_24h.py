@@ -222,30 +222,16 @@ def main():
     
     LOS Regression Task: Predicts continuous LOS in days (not binned classes).
     """
-    # Load configs
-    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
+    # Load config (standalone model config with all parameters)
     model_config_path = Path("configs/model/deepecg_sl/deepecg_sl.yaml")
     
-    # Load demographic features config (Age + Sex only, NO diagnoses)
-    feature_config_path = Path("configs/features/demographic_features.yaml")
-    if not feature_config_path.exists():
-        feature_config_path = None
-        print("Note: Demographic features config not found. Training without Age & Sex features.")
-    
-    config = load_config(
-        base_config_path=base_config_path,
-        model_config_path=model_config_path,
-        experiment_config_path=feature_config_path,
-    )
+    config = load_config(model_config_path=model_config_path)
     
     print("="*60)
     print("Training DeepECG-SL (WCR + Self-Supervised Pretraining) for 24h Dataset")
     print("Task: LOS REGRESSION (continuous prediction in days)")
-    print("Configuration: Age + Sex only (NO diagnoses)")
     print("="*60)
-    print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
-    print(f"Feature config: {feature_config_path if feature_config_path else 'None (no features)'}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     
     model_config = config.get('model', {})
@@ -273,6 +259,13 @@ def main():
         print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
     else:
         print(f"Diagnosis features: Disabled")
+    
+    icu_unit_config = config.get('data', {}).get('icu_unit_features', {})
+    if icu_unit_config.get('enabled', False):
+        icu_list = icu_unit_config.get('icu_unit_list', [])
+        print(f"ICU unit features: Enabled ({len(icu_list)} + 1 Other = {len(icu_list) + 1} features)")
+    else:
+        print(f"ICU unit features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -338,7 +331,11 @@ def main():
     total_trainable = wcr_trainable + adapter_trainable + shared_trainable + los_trainable + mortality_trainable
     total_frozen = wcr_frozen + adapter_frozen
     print(f"TOTAL:              {total_trainable:>15,} trainable, {total_frozen:>15,} frozen")
-    print(f"Expected (85M+):    {85_000_000:>15,} trainable")
+    freeze_backbone = model_config.get("wcr", {}).get("freeze_backbone", True)
+    if freeze_backbone:
+        print(f"Expected (Phase 1): ~100K–500K trainable (heads only)")
+    else:
+        print(f"Expected (Phase 2): ~90M trainable (full fine-tuning)")
     
     # Verify feature_dim from config
     feature_dim = config.get("model", {}).get("feature_dim", 768)
@@ -351,11 +348,11 @@ def main():
     print(f"\nWCR Encoder parameter check:")
     print(f"  Trainable parameter tensors: {encoder_trainable_count}/{encoder_total_count}")
     if encoder_trainable_count == 0:
-        print("  ⚠️  WARNING: No encoder parameters are trainable!")
-    elif encoder_trainable_count < encoder_total_count:
-        print(f"  ⚠️  WARNING: Only {encoder_trainable_count}/{encoder_total_count} parameter groups are trainable")
+        print("  ✓ Encoder frozen (Phase 1 head-only)")
+    elif encoder_trainable_count == encoder_total_count:
+        print("  ✓ All encoder parameters trainable (Phase 2 full fine-tuning)")
     else:
-        print(f"  ✓ All encoder parameters are trainable")
+        print(f"  ⚠️  WARNING: Only {encoder_trainable_count}/{encoder_total_count} parameter groups are trainable")
     
     print("="*60 + "\n")
     
@@ -368,37 +365,37 @@ def main():
     if job_id:
         print(f"SLURM Job ID: {job_id}")
     
-    # ========== PHASE 1 SKIPPED: Direct Fine-tuning with Unfrozen Encoder ==========
+    # ========== PHASE 2: Full fine-tuning (entire model + demographics) ==========
     print("\n" + "="*60)
-    print("DIRECT FINE-TUNING (Phase 1 skipped - Encoder starts unfrozen)")
+    print("PHASE 2: FULL FINE-TUNING (Pretrained + Demographics)")
     print("="*60)
-    print("WCR encoder: UNFROZEN from start")
-    print("Input adapter: UNFROZEN from start")
-    print("All layers trainable with layer-dependent learning rates")
+    print("WCR encoder: UNFROZEN (layer-dependent LR)")
+    print("Input adapter: UNFROZEN")
+    print("Trainable: Entire model (backbone + shared layers + heads)")
+    print("Demographics: Enabled (Age & Sex)")
     print("="*60)
     
     checkpoint_dir = Path(config.get("checkpoint", {}).get("save_dir", "outputs/checkpoints"))
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # ========== PHASE 2: Fine-tuning (starting directly) ==========
+    # ========== PHASE 2: Full fine-tuning ==========
     trainer_phase2 = DeepECG_SL_Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
         criterion=criterion,
-        phase=2,  # Start directly with Phase 2 (unfrozen encoder)
+        phase=2,  # Full fine-tuning (entire model)
     )
     
     trainer_phase2.config_paths = {
-        "base": str(base_config_path.resolve()),
         "model": str(model_config_path.resolve()),
     }
     trainer_phase2.job_id = job_id
     
     # Train Phase 2 (no Phase 1 checkpoint - start fresh with unfrozen encoder)
     history_phase2 = trainer_phase2.train_phase2(
-        phase1_checkpoint_path=None,  # No Phase 1 checkpoint
+        phase1_checkpoint_path=None,
         max_epochs=30,
         patience=15,
     )
@@ -454,7 +451,7 @@ def main():
     history_final = evaluate_and_print_results(eval_trainer, test_loader, history_phase2, config)
     
     print("\n" + "="*60)
-    print("DIRECT FINE-TUNING COMPLETED")
+    print("FULL FINE-TUNING COMPLETED (Pretrained + Demographics)")
     print("="*60)
     print(f"Phase 2 checkpoint: {phase2_checkpoint_path}")
     

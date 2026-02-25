@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Dict, Any, Optional
 import torch
+import numpy as np
+import random
 
 
 class EarlyStopping:
@@ -93,6 +95,8 @@ class ModelCheckpoint:
         config: Optional[Dict[str, Any]] = None,
         config_paths: Optional[Dict[str, str]] = None,
         job_id: Optional[str] = None,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        history: Optional[Dict[str, list]] = None,
     ) -> None:
         """Save model checkpoint.
         
@@ -105,6 +109,8 @@ class ModelCheckpoint:
             config: Full configuration dictionary to save.
             config_paths: Dictionary with config file paths (e.g., {"base": "...", "model": "..."}).
             job_id: SLURM job ID (if available).
+            scheduler: Learning rate scheduler (optional, for resume training).
+            history: Training history dictionary (optional, for resume training).
         """
         checkpoint = {
             "epoch": epoch,
@@ -112,6 +118,24 @@ class ModelCheckpoint:
             "optimizer_state_dict": optimizer.state_dict(),
             "metrics": metrics,
         }
+        
+        # Add scheduler state (CRITICAL for resume training)
+        if scheduler is not None:
+            checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+            # For ReduceLROnPlateau, we also need to track the last metric value
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                checkpoint["scheduler_last_metric"] = getattr(scheduler, 'best', None)
+        
+        # Add random states for reproducibility
+        checkpoint["random_states"] = {
+            "torch": torch.get_rng_state(),
+            "numpy": np.random.get_state(),
+            "python": random.getstate(),
+        }
+        
+        # Add training history (useful for resume and visualization)
+        if history is not None:
+            checkpoint["history"] = history
         
         # Add config if provided
         if config is not None:
@@ -178,3 +202,19 @@ class ModelCheckpoint:
             Checkpoint dictionary.
         """
         return torch.load(checkpoint_path, map_location="cpu")
+    
+    @staticmethod
+    def restore_random_states(checkpoint: Dict[str, Any]) -> None:
+        """Restore random states from checkpoint for reproducibility.
+        
+        Args:
+            checkpoint: Checkpoint dictionary containing random_states.
+        """
+        if "random_states" in checkpoint:
+            random_states = checkpoint["random_states"]
+            if "torch" in random_states:
+                torch.set_rng_state(random_states["torch"])
+            if "numpy" in random_states:
+                np.random.set_state(random_states["numpy"])
+            if "python" in random_states:
+                random.setstate(random_states["python"])

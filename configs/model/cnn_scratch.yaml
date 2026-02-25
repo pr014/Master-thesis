@@ -1,6 +1,73 @@
-# CNN from scratch model-specific configuration
-# Merges with baseline.yaml
-# Only CNN-specific overrides go here
+# CNN from scratch - Vollständige Konfiguration
+# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+# Random seed for reproducibility
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # LOS task type: REGRESSION
+  # LOS values are continuous (days), not binned into classes
+  los_task: "regression"  # "regression" or "classification"
+  
+  # Data splitting strategy (temporal split only)
+  split_strategy: "temporal_stratified"  # "temporal" or "temporal_stratified"
+  # temporal: Time-based split (train=oldest, test=newest)
+  # temporal_stratified: Time-based split with LOS stratification within segments
+  
+  # Preprocessing (same for all models)
+  # Pipeline order: Resampling → Bandpass Filtering → Segmentation → Normalization
+  preprocessing:
+    target_sampling_rate: 500.0  # Resample to 500 Hz
+    window_seconds: 10.0  # Segment to 10 seconds (5000 samples at 500 Hz)
+    filter_type: "bandpass"  # Bandpass filter (0.5-50 Hz, Butterworth 4th order)
+    filter_lowcut: 0.5  # Low cutoff frequency in Hz
+    filter_highcut: 50.0  # High cutoff frequency in Hz
+    filter_order: 4  # Butterworth filter order
+    normalize: "zscore"  # Z-score normalization per lead
+    # Segmentation: Zero-padding for shorter signals, center crop for longer signals
+  
+  # Data augmentation
+  # Applied only during training, not for validation/test
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03  # Noise std as fraction of signal std
+    amplitude_scaling: true
+    scale_min: 0.85  # Minimum scaling factor
+    scale_max: 1.15  # Maximum scaling factor
+    # Future options (not implemented yet):
+    # time_warping: false
+    # lead_dropout: false
+  
+  # Demographic features (Age & Sex) - DISABLED
+  demographic_features:
+    enabled: false
+  
+  # Diagnosis features - DISABLED
+  diagnosis_features:
+    enabled: false
+
+# =============================================================================
+# MODEL ARCHITECTURE
+# =============================================================================
 
 model:
   type: "CNNScratch"
@@ -9,3 +76,100 @@ model:
   # CNN-specific architecture parameters (if needed in future)
   # Currently using fixed architecture, can be made configurable later
 
+# =============================================================================
+# TRAINING HYPERPARAMETERS
+# =============================================================================
+
+training:
+  batch_size: 64
+  num_epochs: 50  # max_epochs
+  num_workers: 4  # DataLoader workers
+  pin_memory: true
+  
+  # Optimizer
+  optimizer:
+    type: "Adam"
+    lr: 5e-4  # learning_rate
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]  # Adam betas
+  
+  # Gradient clipping
+  gradient_clip_norm: 1.0
+  
+  # Dropout rate (applied in model architectures)
+  dropout_rate: 0.3
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  # Loss function - MSE for LOS REGRESSION
+  loss:
+    type: "mse"  # "mse" (Mean Squared Error) or "l1" (Mean Absolute Error) for regression
+    # Note: For classification tasks, use "cross_entropy", "focal", or "weighted_ce"
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1  # Fraction of data for validation (10% for 80-10-10 split)
+  val_frequency: 1  # Validate every N epochs
+
+test_split: 0.1  # Fraction of data for testing (10% for 80-10-10 split)
+
+# =============================================================================
+# EARLY STOPPING
+# =============================================================================
+
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"  # Options: "val_loss", "val_los_mae" for regression
+  mode: "min"  # "min" for loss/MAE
+  # Note: For mortality prediction, monitor "val_auc" with mode "max"
+  # For length of stay REGRESSION, monitor "val_loss" or "val_los_mae" with mode "min"
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1  # Save checkpoint every N epochs
+  save_best: true  # Save best model based on validation metric
+  metric: "val_loss"  # Metric to track for best model
+
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10  # Log every N batches
+
+# =============================================================================
+# EVALUATION METRICS
+# =============================================================================
+
+evaluation:
+  metrics:
+    - "mae"  # Mean Absolute Error
+    - "rmse"  # Root Mean Squared Error
+    - "r2"  # R² Score
+    - "median_ae"  # Median Absolute Error
+    # Mortality metrics (binary classification)
+    - "accuracy"  # For mortality
+    - "auc_roc"  # For mortality
+
+# =============================================================================
+# MULTI-TASK LEARNING
+# =============================================================================
+
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"  # Path to admissions.csv for mortality labels
+  los_loss_weight: 1.0  # Weight for LOS REGRESSION loss (MSE)
+  mortality_loss_weight: 1.0  # Weight for mortality prediction loss (BCE)
+  mortality_use_weighted_loss: false  # Use weighted BCE for mortality (if class imbalance)
+  mortality_pos_weight: null  # Positive class weight for mortality (auto-calculated if null and weighted_loss=true)

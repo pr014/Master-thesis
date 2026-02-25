@@ -1,6 +1,56 @@
-# EfficientNet1D-B1 model-specific configuration (Training with Pretrained Weights)
-# Merges with baseline.yaml
-# Only EfficientNet1D-B1-specific overrides go here
+# EfficientNet1D-B1 (Pretrained) - Vollständige Konfiguration
+# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# Architecture follows EfficientNet-B1 paper (Tan & Le, 2019)
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+seed: 42
+
+device:
+  device: null
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0
+  window_seconds: 10.0
+  num_leads: 12
+  
+  los_task: "regression"
+  split_strategy: "temporal_stratified"
+  
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+  
+  demographic_features:
+    enabled: false
+  
+  diagnosis_features:
+    enabled: false
+
+# =============================================================================
+# MODEL ARCHITECTURE
+# =============================================================================
 
 model:
   type: "EfficientNet1D_B1"
@@ -13,8 +63,94 @@ model:
   # Pretrained weights configuration
   pretrained:
     enabled: true  # Load pretrained weights for transfer learning
-    weights_path: "configs/weights/pretrained_weights/efficientnet1d_b1.pt"  # Path to pretrained weights file (relative to project root or absolute)
+    weights_path: "configs/weights/pretrained_weights/efficientnet1d_b1.pt"
     # NOTE: Update this path to point to your actual EfficientNet1D-B1 weights file
-    # Example absolute path: "/path/to/efficientnet1d_b1.pt"
-    freeze_backbone: false  # Fine-tuning: train all layers (backbone + head). Set to true for feature extraction (only train head)
+    freeze_backbone: false  # Fine-tuning: train all layers (backbone + head)
 
+# =============================================================================
+# TRAINING HYPERPARAMETERS
+# =============================================================================
+
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  optimizer:
+    type: "Adam"
+    lr: 5e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  gradient_clip_norm: 1.0
+  dropout_rate: 0.3
+  
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  loss:
+    type: "mse"
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1
+  val_frequency: 1
+
+test_split: 0.1
+
+# =============================================================================
+# EARLY STOPPING
+# =============================================================================
+
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"
+  mode: "min"
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# =============================================================================
+# EVALUATION METRICS
+# =============================================================================
+
+evaluation:
+  metrics:
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "median_ae"
+    - "accuracy"
+    - "auc_roc"
+
+# =============================================================================
+# MULTI-TASK LEARNING
+# =============================================================================
+
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
+  mortality_use_weighted_loss: false
+  mortality_pos_weight: null

@@ -1,10 +1,12 @@
 """HuBERT-ECG Encoder Wrapper for Multi-Task Learning.
 
-Architecture follows the original ecg-fm-benchmarking repository:
-https://github.com/HeartWise-AI/ecg-fm-benchmarking
+Architecture follows the ORIGINAL HuBERT-ECG paper repository:
+https://github.com/Edoar-do/HuBERT-ECG
+
+Paper: "HuBERT-ECG as a self-supervised foundation model for broad and scalable cardiac applications"
 
 Key components:
-- HuBERTECG: Base transformer model from transformers library
+- HuBERTECG: Base transformer model extending HubertModel from transformers
 - HuBERTForECGClassification: Classification wrapper with mean pooling
 - Input: (B, 12, 5000) @ 500Hz flattened to (B, 60000)
 - Output: (B, hidden_size=768)
@@ -16,14 +18,13 @@ import torch.nn as nn
 from pathlib import Path
 import sys
 
-# Add clones directory to path for HuBERT-ECG imports
+# Add clones directory to path for HuBERT-ECG imports (ORIGINAL Paper repository)
 project_root = Path(__file__).parent.parent.parent.parent
-clones_path = project_root / "clones" / "ecg-fm-benchmarking" / "code"
+clones_path = project_root / "clones" / "HuBERT-ECG" / "code"
 if str(clones_path) not in sys.path:
     sys.path.insert(0, str(clones_path))
 
-from clinical_ts.models.ecg_foundation_models.hubert_ecg.hubert_ecg import HuBERTECG, HuBERTECGConfig
-from clinical_ts.models.ecg_foundation_models.hubert_ecg.config import hubert_config as default_hubert_config
+from hubert_ecg import HuBERTECG, HuBERTECGConfig
 
 
 class HuBERTEncoder(nn.Module):
@@ -68,9 +69,10 @@ class HuBERTEncoder(nn.Module):
         cache_dir = pretrained_config.get("cache_dir", "data/pretrained_weights/Hubert_ECG/base")
         
         # Resolve cache directory path (relative to project root)
+        # Path: src/models/hubert_ecg/encoder.py -> parent.parent.parent.parent = MA-thesis-1/
         cache_dir_path = Path(cache_dir)
         if not cache_dir_path.is_absolute():
-            project_root_path = Path(__file__).parent.parent.parent.parent.parent
+            project_root_path = Path(__file__).parent.parent.parent.parent  # src/../../../.. = MA-thesis-1/
             cache_dir_path = project_root_path / cache_dir
         
         # Resolve checkpoint path
@@ -88,27 +90,43 @@ class HuBERTEncoder(nn.Module):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         
-        # Load HuBERT config
+        # Load HuBERT config from JSON file (required for original HuBERT-ECG)
+        config_path_obj = None
         if config_path:
             config_path_obj = Path(config_path)
-            if config_path_obj.is_absolute():
-                if not config_path_obj.exists():
-                    config_filename = config_path_obj.name
-                    config_path_obj = cache_dir_path / config_filename
-            else:
+            if not config_path_obj.is_absolute():
                 config_path_obj = cache_dir_path / config_path
-            
-            if config_path_obj.exists():
-                import json
-                with open(config_path_obj, 'r') as f:
-                    config_dict = json.load(f)
-                hubert_model_config = HuBERTECGConfig(**config_dict)
-                print(f"Loaded HuBERT config from: {config_path_obj}")
-            else:
-                print(f"Warning: Config file not found at {config_path_obj}, using default config")
-                hubert_model_config = default_hubert_config
+            elif not config_path_obj.exists():
+                config_path_obj = cache_dir_path / config_path_obj.name
         else:
-            hubert_model_config = default_hubert_config
+            # Default: look for config.json in cache directory
+            config_path_obj = cache_dir_path / "config.json"
+        
+        if config_path_obj and config_path_obj.exists():
+            import json
+            with open(config_path_obj, 'r') as f:
+                config_dict = json.load(f)
+            hubert_model_config = HuBERTECGConfig(**config_dict)
+            print(f"Loaded HuBERT config from: {config_path_obj}")
+        else:
+            # Fallback: create default HuBERT-ECG config matching paper specifications
+            print(f"Warning: Config file not found, using default HuBERT-ECG paper config")
+            hubert_model_config = HuBERTECGConfig(
+                # HuBERT-ECG base model parameters from paper
+                hidden_size=768,
+                num_hidden_layers=12,
+                num_attention_heads=12,
+                intermediate_size=3072,
+                hidden_dropout_prob=0.1,
+                attention_probs_dropout_prob=0.1,
+                # Feature extractor for ECG @ 500Hz
+                conv_dim=[512, 512, 512, 512, 512, 512, 512],
+                conv_stride=[5, 2, 2, 2, 2, 2, 2],
+                conv_kernel=[10, 3, 3, 3, 3, 2, 2],
+                # Pretraining heads (will be removed for fine-tuning)
+                ensemble_length=1,
+                vocab_sizes=[100],
+            )
         
         # Initialize HuBERT-ECG model (following HuBERTForECGClassification pattern)
         print(f"Initializing HuBERT-ECG model with hidden_size={self.hidden_size}")

@@ -8,14 +8,139 @@ import pandas as pd
 from torch.utils.data import DataLoader, random_split
 from sklearn.model_selection import train_test_split
 
-from .ecg_dataset import ECGDataset, build_demo_index
+from .ecg_dataset import ECGDataset, build_demo_index, extract_subject_id_from_path, construct_ecg_time
 from .ecg_loader import build_npy_index
+from ..labeling.icu_los_labels import los_to_bin
 from .timestamp_mapping import (
     load_timestamp_mapping,
     create_timestamp_mapping,
     auto_detect_original_path,
     get_timestamp_mapping_path,
 )
+
+
+def get_los_values_for_records(
+    records: List[Dict[str, Any]],
+    icu_mapper: Any,
+    timestamp_mapping: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+    data_dir: Optional[str] = None,
+) -> List[float]:
+    """Extract LOS values for records by matching ECGs to ICU stays.
+    
+    Mirrors ECGDataset._generate_labels logic to get LOS for each matched record.
+    
+    Args:
+        records: List of record dicts with 'base_path' key.
+        icu_mapper: ICUStayMapper instance.
+        timestamp_mapping: Optional mapping from relative base_path to timestamps.
+        data_dir: Data directory for resolving relative paths.
+    
+    Returns:
+        List of LOS values in days (float) for matched records only.
+    """
+    los_values = []
+    data_dir_path = Path(data_dir) if data_dir else None
+    
+    for record in records:
+        base_path = record.get("base_path", "")
+        if not base_path:
+            continue
+        try:
+            subject_id = extract_subject_id_from_path(base_path)
+        except ValueError:
+            continue
+        
+        ecg_time = None
+        if timestamp_mapping is not None and data_dir_path is not None:
+            try:
+                base_path_obj = Path(base_path)
+                if base_path_obj.is_absolute():
+                    rel_path = base_path_obj.relative_to(data_dir_path)
+                else:
+                    rel_path = Path(base_path)
+                rel_path_str = str(rel_path).replace("\\", "/")
+                if rel_path_str in timestamp_mapping:
+                    ts_info = timestamp_mapping[rel_path_str]
+                    ecg_time = construct_ecg_time(
+                        ts_info.get("base_date"), ts_info.get("base_time")
+                    )
+            except (ValueError, KeyError):
+                pass
+        
+        if ecg_time is None and icu_mapper is not None:
+            subject_stays = icu_mapper.icustays_df[
+                icu_mapper.icustays_df["subject_id"] == subject_id
+            ]
+            if len(subject_stays) > 0:
+                ecg_time = pd.to_datetime(subject_stays.iloc[0]["intime"])
+        
+        if ecg_time is None:
+            continue
+        
+        stay_id = icu_mapper.map_ecg_to_stay(subject_id, ecg_time)
+        if stay_id is None:
+            continue
+        
+        los_days = icu_mapper.get_los(stay_id)
+        if los_days is not None:
+            los_values.append(float(los_days))
+    
+    return los_values
+
+
+def compute_regression_weights(
+    los_values: List[float],
+    config: Dict[str, Any],
+) -> Optional[Dict[int, float]]:
+    """Compute sample weights per LOS bin for imbalanced regression.
+    
+    Args:
+        los_values: List of LOS values in days from training set.
+        config: Full config with data.los_binning and training.loss.
+    
+    Returns:
+        Dict mapping bin_idx -> weight, normalized so mean=1.0.
+        Returns None if los_values is empty.
+    """
+    if not los_values:
+        return None
+    
+    data_config = config.get("data", {})
+    los_binning = data_config.get("los_binning", {})
+    strategy = los_binning.get("strategy", "intervals")
+    max_days = los_binning.get("max_days", 9)
+    
+    loss_config = config.get("training", {}).get("loss", {})
+    method = loss_config.get("method", "balanced")
+    
+    bins = [
+        los_to_bin(los, binning_strategy=strategy, max_days=max_days)
+        for los in los_values
+    ]
+    n_bins = max(bins) + 1
+    counts = [bins.count(i) for i in range(n_bins)]
+    n_total = sum(counts)
+    
+    if n_total == 0:
+        return None
+    
+    weights = []
+    for c in counts:
+        if c > 0:
+            if method == "balanced":
+                w = n_total / (n_bins * c)
+            else:
+                w = np.sqrt(n_total) / np.sqrt(c)
+        else:
+            w = 0.0
+        weights.append(w)
+    
+    mean_weight = np.mean([w for w in weights if w > 0])
+    if mean_weight <= 0:
+        return None
+    weights_normalized = [w / mean_weight if w > 0 else 0.0 for w in weights]
+    
+    return {i: weights_normalized[i] for i in range(len(weights_normalized))}
 
 
 def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -78,6 +203,26 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             result["diagnosis_features"] = None
     else:
         result["diagnosis_features"] = None
+    
+    # Add icu_unit_features if present in batch
+    if "icu_unit_features" in batch[0]:
+        icu_features_list = [item.get("icu_unit_features") for item in batch]
+        if any(f is not None for f in icu_features_list):
+            first_non_none = next(f for f in icu_features_list if f is not None)
+            icu_dim = first_non_none.shape[0]
+            icu_features_filled = [
+                f if f is not None else torch.zeros(icu_dim, dtype=torch.float32)
+                for f in icu_features_list
+            ]
+            icu_unit_features = torch.stack(icu_features_filled)
+            result["icu_unit_features"] = icu_unit_features
+        else:
+            result["icu_unit_features"] = None
+    else:
+        result["icu_unit_features"] = None
+    
+    if "sample_weight" in batch[0]:
+        result["sample_weight"] = torch.stack([item["sample_weight"] for item in batch])
     
     return result
 
@@ -540,6 +685,22 @@ def create_dataloaders(
     # Get demographic features config if enabled
     demographic_features_config = data_config.get("demographic_features", {})
     
+    # Regression sample weighting: compute weights from train LOS distribution
+    regression_weights = None
+    los_binning = data_config.get("los_binning", {})
+    if task_type == "regression" and training_config.get("loss", {}).get("weighted", False):
+        los_values = get_los_values_for_records(
+            train_records,
+            icu_mapper,
+            timestamp_mapping=timestamp_mapping,
+            data_dir=data_dir,
+        )
+        regression_weights = compute_regression_weights(los_values, config)
+        if regression_weights is not None:
+            print(f"Regression sample weighting: enabled (from {len(los_values):,} train samples)")
+        else:
+            print("Regression sample weighting: disabled (no matched samples or empty)")
+    
     # Create datasets
     # Augmentation only for training (transform is None for val/test)
     train_dataset = ECGDataset(
@@ -554,9 +715,11 @@ def create_dataloaders(
         data_dir=data_dir,
         demographic_features_config=demographic_features_config,
         config=config,
+        regression_weights=regression_weights,
+        los_binning=los_binning,
     )
     
-    # No augmentation for validation/test
+    # No augmentation for validation/test (no regression weighting for eval)
     val_dataset = ECGDataset(
         records=val_records,
         labels=labels,
@@ -569,6 +732,8 @@ def create_dataloaders(
         data_dir=data_dir,
         demographic_features_config=demographic_features_config,
         config=config,
+        regression_weights=None,
+        los_binning=None,
     )
     
     # Create DataLoaders with custom collate function
@@ -605,6 +770,8 @@ def create_dataloaders(
             data_dir=data_dir,
             demographic_features_config=demographic_features_config,
             config=config,
+            regression_weights=None,
+            los_binning=None,
         )
         test_loader = DataLoader(
             test_dataset,

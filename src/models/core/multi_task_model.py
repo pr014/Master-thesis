@@ -69,12 +69,22 @@ class MultiTaskECGModel(nn.Module):
         if use_diagnoses:
             dummy_diagnosis_features = torch.zeros(1, diagnosis_dim, device=device)
         
+        # Check if ICU unit features are enabled
+        icu_unit_config = data_config.get("icu_unit_features", {})
+        use_icu_units = icu_unit_config.get("enabled", False)
+        icu_unit_list = icu_unit_config.get("icu_unit_list", [])
+        icu_unit_dim = len(icu_unit_list) if use_icu_units else 0
+        dummy_icu_unit_features = None
+        if use_icu_units:
+            dummy_icu_unit_features = torch.zeros(1, icu_unit_dim, device=device)
+        
         with torch.no_grad():
             try:
                 features = base_model.get_features(
                     dummy_input, 
                     demographic_features=dummy_demographic_features,
-                    diagnosis_features=dummy_diagnosis_features
+                    diagnosis_features=dummy_diagnosis_features,
+                    icu_unit_features=dummy_icu_unit_features
                 )
                 feature_dim = features.shape[1]
             except NotImplementedError:
@@ -104,7 +114,8 @@ class MultiTaskECGModel(nn.Module):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None
+        diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """Forward pass through multi-task model.
         
@@ -114,17 +125,20 @@ class MultiTaskECGModel(nn.Module):
                                  None if demographic features are disabled.
             diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
                                None if diagnosis features are disabled.
+            icu_unit_features: Optional tensor of shape (B, icu_unit_dim) containing one-hot ICU unit.
+                              None if ICU unit features are disabled.
         
         Returns:
             Dictionary with:
                 - 'los': LOS regression output of shape (B, 1) - continuous LOS in days
                 - 'mortality': Mortality probabilities of shape (B, 1) in range [0, 1]
         """
-        # Extract features using base model (includes demographic and diagnosis features if enabled)
+        # Extract features using base model (includes demographic, diagnosis, and ICU unit features if enabled)
         features = self.base_model.get_features(
             x, 
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features
+            diagnosis_features=diagnosis_features,
+            icu_unit_features=icu_unit_features
         )  # (B, feature_dim)
         
         # LOS regression head

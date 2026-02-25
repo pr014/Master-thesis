@@ -203,74 +203,46 @@ class HuBERT_ECG_Trainer(Trainer):
 
 
 def main():
-    """Main training function for 24h dataset with two-phase training.
+    """Main training function for HuBERT-ECG with Phase 1 only (frozen backbone / head-only).
     
-    LOS Regression Task: Predicts continuous LOS in days (not binned classes).
+    Phase 1: Frozen backbone, only task heads trained.
+    Phase 2: Fine-tuning (skipped in this baseline run, H1).
+    
+    LOS Regression Task: Predicts continuous LOS in days.
     """
-    # Load configs
-    base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
+    # Load config
     model_config_path = Path("configs/model/hubert_ecg/hubert_ecg.yaml")
-    
-    # Load demographic features config (Age + Sex only, NO diagnoses)
-    feature_config_path = Path("configs/features/demographic_features.yaml")
-    if not feature_config_path.exists():
-        feature_config_path = None
-        print("Note: Demographic features config not found. Training without Age & Sex features.")
-    
-    config = load_config(
-        base_config_path=base_config_path,
-        model_config_path=model_config_path,
-        experiment_config_path=feature_config_path,
-    )
+    config = load_config(model_config_path=model_config_path)
     
     print("="*60)
-    print("Training HuBERT-ECG (Self-Supervised Pretraining) for 24h Dataset")
+    print("Training HuBERT-ECG - Phase 1 Only (Frozen Backbone / Head-Only)")
     print("Task: LOS REGRESSION (continuous prediction in days)")
-    print("Configuration: Age + Sex only (NO diagnoses)")
     print("="*60)
-    print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
-    print(f"Feature config: {feature_config_path if feature_config_path else 'None (no features)'}")
-    print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     
     model_config = config.get('model', {})
     hubert_config = model_config.get('hubert', {})
-    print(f"HuBERT hidden_size: {hubert_config.get('hidden_size', 768)}")
-    
     pretrained_config = model_config.get('pretrained', {})
+    
     if pretrained_config.get('enabled', False):
-        cache_dir = pretrained_config.get('cache_dir', 'data/pretrained_weights/hubert_ecg')
-        checkpoint_path = hubert_config.get('checkpoint_path', 'checkpoint.pt')
-        print(f"Pretrained weights: Enabled (cache: {cache_dir})")
-        print(f"Checkpoint path: {checkpoint_path}")
+        cache_dir = pretrained_config.get('cache_dir', 'data/pretrained_weights/Hubert_ECG/base')
+        print(f"Pretrained weights: Enabled ({cache_dir})")
     else:
-        print("Pretrained weights: Disabled (training from scratch)")
+        print("Pretrained weights: Disabled (random init)")
     
     demographic_config = config.get('data', {}).get('demographic_features', {})
-    if demographic_config.get('enabled', False):
-        print(f"Demographic features: Enabled (Age & Sex)")
-    else:
-        print(f"Demographic features: Disabled")
+    print(f"Demographic features: {'Enabled' if demographic_config.get('enabled', False) else 'Disabled'}")
     
     diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
-    if diagnosis_config.get('enabled', False):
-        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
-        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
-    else:
-        print(f"Diagnosis features: Disabled")
+    print(f"Diagnosis features: {'Enabled' if diagnosis_config.get('enabled', False) else 'Disabled'}")
     print("="*60)
     
     # Load ICU stays and create mapper
     icu_mapper = setup_icustays_mapper(config)
     
-    # Multi-task is required for HuBERT-ECG
-    multi_task_config = config.get("multi_task", {})
-    is_multi_task = multi_task_config.get("enabled", False)
-    if not is_multi_task:
-        print("Warning: Multi-task is disabled. HuBERT-ECG requires multi-task learning.")
-        print("Enabling multi-task in config...")
+    # Ensure multi-task is enabled
+    if not config.get("multi_task", {}).get("enabled", False):
         config["multi_task"] = {"enabled": True}
-        is_multi_task = True
     
     # Create DataLoaders
     train_loader, val_loader, test_loader = create_dataloaders(
@@ -282,29 +254,29 @@ def main():
         mortality_labels=None,
     )
     
-    # Create base model (will load weights if checkpoint_path is provided)
-    print("\nCreating HuBERT-ECG model...")
-    print("This may take a while on first run (loading pretrained weights)...")
+    # Create base model with pretrained weights + frozen backbone
+    print("\nCreating HuBERT-ECG model (loading pretrained weights)...")
     base_model = HuBERT_ECG(config)
-    print(f"Model created with {base_model.count_parameters():,} parameters")
     
-    # Wrap in MultiTaskECGModel for multi-task compatibility
-    print("Creating Multi-Task model (LOS Regression + Mortality Classification)...")
+    total_params = base_model.count_parameters()
+    trainable_params = sum(p.numel() for p in base_model.parameters() if p.requires_grad)
+    print(f"Total parameters:     {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,} (backbone frozen, heads only)")
+    
+    # Wrap in MultiTaskECGModel
     model = MultiTaskECGModel(base_model, config)
-    print(f"Multi-Task model created with {model.count_parameters():,} parameters")
     
-    # Create multi-task loss (MSE for LOS regression, BCE for mortality)
+    # Loss function
     criterion = get_multi_task_loss(config)
-    print("Using Multi-Task Loss (LOS MSE weight=1.0, Mortality BCE weight=0.5)")
     
-    # Get job ID for checkpoint naming
+    # Get SLURM job ID
     job_id = os.getenv("SLURM_JOB_ID")
     if job_id:
         print(f"SLURM Job ID: {job_id}")
     
-    # ========== PHASE 1: Frozen Backbone ==========
+    # ========== PHASE 1: Frozen Backbone (Head-Only Training) ==========
     print("\n" + "="*60)
-    print("PHASE 1: FROZEN BACKBONE TRAINING")
+    print("PHASE 1: FROZEN BACKBONE - HEAD-ONLY TRAINING")
     print("="*60)
     
     trainer_phase1 = HuBERT_ECG_Trainer(
@@ -315,108 +287,50 @@ def main():
         criterion=criterion,
         phase=1,
     )
-    
-    trainer_phase1.config_paths = {
-        "base": str(base_config_path.resolve()),
-        "model": str(model_config_path.resolve()),
-    }
+    trainer_phase1.config_paths = {"model": str(model_config_path.resolve())}
     trainer_phase1.job_id = job_id
     
-    # Train Phase 1
-    history_phase1 = trainer_phase1.train_phase1(max_epochs=20, patience=20)
+    # Phase 1: max 50 epochs (full num_epochs from config), patience 20
+    history_phase1 = trainer_phase1.train_phase1(
+        max_epochs=config.get("training", {}).get("num_epochs", 50),
+        patience=config.get("early_stopping", {}).get("patience", 20),
+    )
     
     print("\nPhase 1 completed!")
     print(f"Best validation loss: {min(history_phase1.get('val_loss', [float('inf')])):.4f}")
-    print(f"Best validation MAE: {min(history_phase1.get('val_los_mae', [float('inf')])):.4f} days")
+    print(f"Best validation MAE:  {min(history_phase1.get('val_los_mae', [float('inf')])):.4f} days")
     
     # Save Phase 1 checkpoint
     checkpoint_dir = Path(config.get("checkpoint", {}).get("save_dir", "outputs/checkpoints"))
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     phase1_checkpoint_path = checkpoint_dir / f"hubert_ecg_phase1_best_{job_id if job_id else 'local'}.pt"
     
-    if hasattr(trainer_phase1.checkpoint, 'best_model_state'):
-        torch.save({
-            'model_state_dict': trainer_phase1.checkpoint.best_model_state,
-            'epoch': trainer_phase1.checkpoint.best_epoch,
-            'val_loss': trainer_phase1.checkpoint.best_score,
-            'history': history_phase1,
-            'config': config,
-        }, phase1_checkpoint_path)
-        print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
-    else:
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'epoch': trainer_phase1.current_epoch,
-            'history': history_phase1,
-            'config': config,
-        }, phase1_checkpoint_path)
-        print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
-    
-    # ========== PHASE 2: Fine-tuning ==========
-    print("\n" + "="*60)
-    print("PHASE 2: FINE-TUNING WITH LAYER-DEPENDENT LEARNING RATES")
-    print("="*60)
-    
-    trainer_phase2 = HuBERT_ECG_Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        config=config,
-        criterion=criterion,
-        phase=2,
-    )
-    
-    trainer_phase2.config_paths = {
-        "base": str(base_config_path.resolve()),
-        "model": str(model_config_path.resolve()),
+    save_dict = {
+        'model_state_dict': (
+            trainer_phase1.checkpoint.best_model_state
+            if hasattr(trainer_phase1.checkpoint, 'best_model_state')
+            else model.state_dict()
+        ),
+        'epoch': getattr(trainer_phase1.checkpoint, 'best_epoch', trainer_phase1.current_epoch),
+        'val_loss': getattr(trainer_phase1.checkpoint, 'best_score', None),
+        'history': history_phase1,
+        'config': config,
     }
-    trainer_phase2.job_id = job_id
-    
-    # Train Phase 2 (load Phase 1 checkpoint)
-    history_phase2 = trainer_phase2.train_phase2(
-        phase1_checkpoint_path=phase1_checkpoint_path,
-        max_epochs=30,
-        patience=15,
-    )
-    
-    print("\nPhase 2 completed!")
-    print(f"Best validation loss: {min(history_phase2.get('val_loss', [float('inf')])):.4f}")
-    print(f"Best validation MAE: {min(history_phase2.get('val_los_mae', [float('inf')])):.4f} days")
-    
-    # Save Phase 2 checkpoint
-    phase2_checkpoint_path = checkpoint_dir / f"hubert_ecg_phase2_best_{job_id if job_id else 'local'}.pt"
-    
-    if hasattr(trainer_phase2.checkpoint, 'best_model_state'):
-        torch.save({
-            'model_state_dict': trainer_phase2.checkpoint.best_model_state,
-            'epoch': trainer_phase2.checkpoint.best_epoch,
-            'val_loss': trainer_phase2.checkpoint.best_score,
-            'history': history_phase2,
-            'config': config,
-        }, phase2_checkpoint_path)
-        print(f"Saved Phase 2 checkpoint to: {phase2_checkpoint_path}")
-    else:
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'epoch': trainer_phase2.current_epoch,
-            'history': history_phase2,
-            'config': config,
-        }, phase2_checkpoint_path)
-        print(f"Saved Phase 2 checkpoint to: {phase2_checkpoint_path}")
+    torch.save(save_dict, phase1_checkpoint_path)
+    print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
     
     # ========== FINAL EVALUATION ==========
     print("\n" + "="*60)
     print("FINAL EVALUATION ON TEST SET")
     print("="*60)
     
-    # Load best Phase 2 model for evaluation
-    if phase2_checkpoint_path.exists():
-        checkpoint = torch.load(phase2_checkpoint_path, map_location=trainer_phase2.device)
+    # Load best Phase 1 model
+    if phase1_checkpoint_path.exists():
+        checkpoint = torch.load(phase1_checkpoint_path, map_location=trainer_phase1.device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.to(trainer_phase2.device)
-        print(f"Loaded best Phase 2 model from epoch {checkpoint.get('epoch', 'unknown')}")
+        model.to(trainer_phase1.device)
+        print(f"Loaded best Phase 1 model from epoch {checkpoint.get('epoch', 'unknown')}")
     
-    # Create a simple trainer for evaluation
     eval_trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -426,16 +340,14 @@ def main():
     )
     eval_trainer.job_id = job_id
     
-    # Evaluate on test set
-    history_final = evaluate_and_print_results(eval_trainer, test_loader, history_phase2, config)
+    history_final = evaluate_and_print_results(eval_trainer, test_loader, history_phase1, config)
     
     print("\n" + "="*60)
-    print("TWO-PHASE TRAINING COMPLETED")
+    print("PHASE 1 (HEAD-ONLY) TRAINING COMPLETED")
     print("="*60)
-    print(f"Phase 1 checkpoint: {phase1_checkpoint_path}")
-    print(f"Phase 2 checkpoint: {phase2_checkpoint_path}")
+    print(f"Checkpoint: {phase1_checkpoint_path}")
     
-    return history_phase2
+    return history_phase1
 
 
 if __name__ == "__main__":

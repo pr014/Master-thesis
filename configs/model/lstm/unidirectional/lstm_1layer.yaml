@@ -1,34 +1,163 @@
-# LSTM1D Unidirectional model-specific configuration (Improved)
-# Merges with baseline.yaml
-# Only LSTM1D-specific overrides go here
-# Pure LSTM architecture (no CNN) with improvements: 2-layer, mean pooling, embedding
+# LSTM1D Unidirectional (1-Layer) - Vollständige Konfiguration
+# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# Pure LSTM architecture (no CNN) with improvements: mean pooling, embedding
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+seed: 42
+
+device:
+  device: null
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0
+  window_seconds: 10.0
+  num_leads: 12
+  
+  los_task: "regression"
+  split_strategy: "temporal_stratified"
+  
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+  
+  demographic_features:
+    enabled: false
+  
+  diagnosis_features:
+    enabled: false
+
+# =============================================================================
+# MODEL ARCHITECTURE
+# =============================================================================
 
 model:
   type: "LSTM1D"  # Alias for LSTM1D_Unidirectional
-  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
-                  # Note: For regression, this is ignored (output_dim = 1)
+  num_classes: 10
   
   # LSTM-specific architecture parameters
   # Architecture: Pure Unidirectional LSTM for ECG time series classification/regression
   # Based on Kim et al. 2020: 128 units recommended for raw ECG signals
-  # Improved architecture: 2-layer LSTM with dropout, mean pooling, embedding
-  # ~205K parameters (2 layers)
+  # Improved architecture: 1-layer LSTM with dropout, mean pooling, embedding
   
-  hidden_dim: 128  # Hidden dimension for LSTM (Layer 1)
-  num_layers: 2  # Number of LSTM layers (hierarchical temporal dependencies)
+  hidden_dim: 128  # Hidden dimension for LSTM
+  num_layers: 1  # Number of LSTM layers
   lstm_dropout: 0.2  # Dropout between LSTM layers (prevents overfitting)
   bidirectional: false  # Unidirectional LSTM
   
   # Pooling Strategy
   # "mean": Aggregates information across all timesteps (recommended)
-  # "last": Only uses last hidden state (discards 99.98% of information)
-  # "max": Maximum pooling over time dimension
-  # Scientific justification: Lin et al. (2013) demonstrate mean pooling improves LSTM performance
   pooling: "mean"
   
   # Embedding Layer (ENABLED)
-  # Increases representation capacity from raw signal values
-  # Scientific justification: Mikolov et al. (2013) demonstrate embeddings improve feature quality
   use_embedding: true
-  embedding_dim: 64  # Embedding dimension
+  embedding_dim: 64
 
+# =============================================================================
+# TRAINING HYPERPARAMETERS
+# =============================================================================
+
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  optimizer:
+    type: "Adam"
+    lr: 5e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  gradient_clip_norm: 1.0
+  dropout_rate: 0.3
+  
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1e-6
+  
+  loss:
+    type: "mse"
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1
+  val_frequency: 1
+
+test_split: 0.1
+
+# =============================================================================
+# EARLY STOPPING
+# =============================================================================
+
+early_stopping:
+  enabled: true
+  patience: 7
+  monitor: "val_loss"
+  mode: "min"
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# =============================================================================
+# EVALUATION METRICS
+# =============================================================================
+
+evaluation:
+  metrics:
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "median_ae"
+    - "accuracy"
+    - "auc_roc"
+
+# =============================================================================
+# MULTI-TASK LEARNING
+# =============================================================================
+
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
+  mortality_use_weighted_loss: false
+  mortality_pos_weight: null

@@ -1,12 +1,78 @@
-# LSTM1D Unidirectional model-specific configuration (2-Layer)
-# Merges with baseline.yaml
-# Only LSTM1D-specific overrides go here
-# Alternative config for 2-layer LSTM (can be used for experiments)
+# LSTM1D Unidirectional (2-Layer) - Vollständige Konfiguration
+# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# Pure LSTM architecture (no CNN) with improvements: 2-layer, mean pooling, embedding
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+seed: 42
+
+device:
+  device: null
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0
+  window_seconds: 10.0
+  num_leads: 12
+  
+  los_task: "regression"
+  split_strategy: "temporal_stratified"
+  
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+  
+  demographic_features:
+    enabled: false
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+  
+  diagnosis_features:
+    enabled: false
+  
+  icu_unit_features:
+    enabled: true
+    encoding: "onehot"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    unknown_strategy: "other"
+    missing_strategy: "most_common"
+
+# =============================================================================
+# MODEL ARCHITECTURE
+# =============================================================================
 
 model:
   type: "LSTM1D"  # Alias for LSTM1D_Unidirectional
-  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
-                  # Note: For regression, this is ignored (output_dim = 1)
+  num_classes: 10
   
   # LSTM-specific architecture parameters
   # Architecture: 2-Layer Unidirectional LSTM for ECG time series classification/regression
@@ -16,8 +82,96 @@ model:
   hidden_dim: 128  # Hidden dimension for Layer 1
   hidden_dim_layer2: 128  # Hidden dimension for Layer 2
   num_layers: 2  # Number of LSTM layers
-  lstm_dropout: 0.2  # Dropout between LSTM layers (applied manually)
+  lstm_dropout: 0.4  # Dropout between LSTM layers (applied manually)
   bidirectional: false  # Unidirectional LSTM
   pooling: "mean"  # Pooling strategy: "last", "mean", or "max" (mean recommended)
   use_embedding: true  # Whether to use embedding layer (recommended)
-  embedding_dim: 64  # Embedding dimension
+  embedding_dim: 128  # Embedding dimension
+
+# =============================================================================
+# TRAINING HYPERPARAMETERS
+# =============================================================================
+
+training:
+  batch_size: 128
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  optimizer:
+    type: "Adam"
+    lr: 3e-4
+    weight_decay: 2e-4
+    betas: [0.9, 0.999]
+  
+  gradient_clip_norm: 1.0
+  dropout_rate: 0.4
+  
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 8
+    min_lr: 1e-6
+  
+  loss:
+    type: "mse"
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1
+  val_frequency: 1
+
+test_split: 0.1
+
+# =============================================================================
+# EARLY STOPPING
+# =============================================================================
+
+early_stopping:
+  enabled: true
+  patience: 12
+  monitor: "val_loss"
+  mode: "min"
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# =============================================================================
+# EVALUATION METRICS
+# =============================================================================
+
+evaluation:
+  metrics:
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "median_ae"
+    - "accuracy"
+    - "auc_roc"
+
+# =============================================================================
+# MULTI-TASK LEARNING
+# =============================================================================
+
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
+  mortality_use_weighted_loss: false
+  mortality_pos_weight: null

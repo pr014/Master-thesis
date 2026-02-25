@@ -93,10 +93,12 @@ class Trainer:
         self.history = {
             "train_loss": [],
             "train_los_mae": [],
+            "train_los_mse": [],
             "train_los_rmse": [],
             "train_los_r2": [],
             "val_loss": [],
             "val_los_mae": [],
+            "val_los_mse": [],
             "val_los_rmse": [],
             "val_los_r2": [],
             # Optional multi-task metrics (will be populated if present)
@@ -177,8 +179,56 @@ class Trainer:
         else:
             return None
     
-    def train(self) -> Dict[str, list]:
+    def resume_from_checkpoint(self, checkpoint_path: Path) -> int:
+        """Resume training from a checkpoint.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file.
+        
+        Returns:
+            Starting epoch (checkpoint epoch + 1).
+        """
+        self.logger.info(f"Loading checkpoint from: {checkpoint_path}")
+        checkpoint = self.checkpoint.load_checkpoint(checkpoint_path)
+        
+        # Load model state
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.logger.info("Loaded model state")
+        
+        # Load optimizer state
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.logger.info("Loaded optimizer state")
+        
+        # Load scheduler state if available
+        if "scheduler_state_dict" in checkpoint and self.scheduler is not None:
+            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            # For ReduceLROnPlateau, restore the best metric value if available
+            if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                if "scheduler_last_metric" in checkpoint:
+                    self.scheduler.best = checkpoint["scheduler_last_metric"]
+            self.logger.info("Loaded scheduler state")
+        
+        # Restore random states for reproducibility
+        if "random_states" in checkpoint:
+            ModelCheckpoint.restore_random_states(checkpoint)
+            self.logger.info("Restored random states")
+        
+        # Restore training history if available
+        if "history" in checkpoint:
+            self.history = checkpoint["history"]
+            self.logger.info("Restored training history")
+        
+        # Get starting epoch
+        start_epoch = checkpoint.get("epoch", 0) + 1
+        self.logger.info(f"Resuming from epoch {start_epoch}")
+        
+        return start_epoch
+    
+    def train(self, resume_from: Optional[Path] = None) -> Dict[str, list]:
         """Train the model.
+        
+        Args:
+            resume_from: Optional path to checkpoint file to resume from.
         
         Returns:
             Training history dictionary.
@@ -187,11 +237,16 @@ class Trainer:
         val_frequency = self.config.get("validation", {}).get("val_frequency", 1)
         log_frequency = self.config.get("logging", {}).get("log_frequency", 10)
         
-        self.logger.info(f"Starting training for {num_epochs} epochs")
-        self.logger.info(f"Device: {self.device}")
-        self.logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        # Resume from checkpoint if provided
+        start_epoch = 1
+        if resume_from is not None and resume_from.exists():
+            start_epoch = self.resume_from_checkpoint(resume_from)
+        else:
+            self.logger.info(f"Starting training for {num_epochs} epochs")
+            self.logger.info(f"Device: {self.device}")
+            self.logger.info(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         
-        for epoch in range(1, num_epochs + 1):
+        for epoch in range(start_epoch, num_epochs + 1):
             self.current_epoch = epoch
             
             # Training
@@ -293,6 +348,8 @@ class Trainer:
                 config=self.config,
                 config_paths=self.config_paths,
                 job_id=getattr(self, 'job_id', None),
+                scheduler=self.scheduler,
+                history=self.history,
             )
             
             # Early stopping

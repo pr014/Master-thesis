@@ -30,7 +30,7 @@ def _compute_regression_metrics(predictions: np.ndarray, targets: np.ndarray) ->
         targets: Ground truth values (continuous)
     
     Returns:
-        Dictionary with MAE, RMSE, R² metrics
+        Dictionary with MAE, MSE, RMSE, R² metrics
     """
     mae = np.abs(predictions - targets).mean()
     mse = ((predictions - targets) ** 2).mean()
@@ -43,6 +43,7 @@ def _compute_regression_metrics(predictions: np.ndarray, targets: np.ndarray) ->
     
     return {
         "mae": float(mae),
+        "mse": float(mse),
         "rmse": float(rmse),
         "r2": float(r2),
     }
@@ -102,6 +103,11 @@ def train_epoch(
         signals = signals[valid_mask]
         labels = labels[valid_mask]
         
+        # Sample weights for regression (optional)
+        sample_weights = None
+        if "sample_weight" in batch:
+            sample_weights = batch["sample_weight"].to(device)[valid_mask]
+        
         # Get mortality labels if available
         mortality_labels = None
         if is_multi_task and "mortality_label" in batch:
@@ -123,9 +129,16 @@ def train_epoch(
                 # Filter diagnosis features to match valid_mask
                 diagnosis_features = diagnosis_features[valid_mask]
         
+        # Get ICU unit features if available
+        icu_unit_features = None
+        if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
+            icu_unit_features = batch["icu_unit_features"].to(device)
+            if valid_mask.any():
+                icu_unit_features = icu_unit_features[valid_mask]
+        
         # Forward pass
         optimizer.zero_grad()
-        outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features)
+        outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
         
         # Handle multi-task vs single-task
         if is_multi_task and isinstance(outputs, dict):
@@ -135,8 +148,9 @@ def train_epoch(
             
             if isinstance(criterion, MultiTaskLoss):
                 loss_dict = criterion(
-                    los_predictions, labels,  # labels are float for regression
-                    mortality_probs, mortality_labels
+                    los_predictions, labels,
+                    mortality_probs, mortality_labels,
+                    los_sample_weights=sample_weights,
                 )
                 loss = loss_dict["total"]
                 los_loss = loss_dict["los"]
@@ -144,7 +158,10 @@ def train_epoch(
             else:
                 # Fallback: use LOS loss only if MultiTaskLoss not provided
                 los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
-                loss = criterion(los_preds_flat, labels.float())
+                if sample_weights is not None:
+                    loss = criterion(los_preds_flat, labels.float(), weight=sample_weights)
+                else:
+                    loss = criterion(los_preds_flat, labels.float())
                 los_loss = loss
                 mortality_loss = torch.tensor(0.0, device=device)
         elif is_multi_task and isinstance(outputs, tuple):
@@ -154,21 +171,28 @@ def train_epoch(
             if isinstance(criterion, MultiTaskLoss):
                 loss_dict = criterion(
                     los_predictions, labels,
-                    mortality_probs, mortality_labels
+                    mortality_probs, mortality_labels,
+                    los_sample_weights=sample_weights,
                 )
                 loss = loss_dict["total"]
                 los_loss = loss_dict["los"]
                 mortality_loss = loss_dict["mortality"]
             else:
                 los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
-                loss = criterion(los_preds_flat, labels.float())
+                if sample_weights is not None and hasattr(criterion, "forward"):
+                    loss = criterion(los_preds_flat, labels.float(), weight=sample_weights)
+                else:
+                    loss = criterion(los_preds_flat, labels.float())
                 los_loss = loss
                 mortality_loss = torch.tensor(0.0, device=device)
         else:
             # Single-task model
             los_predictions = outputs if not isinstance(outputs, dict) else outputs.get("los", outputs)
             los_preds_flat = los_predictions.squeeze(-1) if los_predictions.dim() > 1 else los_predictions
-            loss = criterion(los_preds_flat, labels.float())
+            if sample_weights is not None:
+                loss = criterion(los_preds_flat, labels.float(), weight=sample_weights)
+            else:
+                loss = criterion(los_preds_flat, labels.float())
             los_loss = loss
             mortality_loss = torch.tensor(0.0, device=device)
             mortality_probs = None
@@ -214,11 +238,12 @@ def train_epoch(
             np.array(all_los_targets)
         )
     else:
-        regression_metrics = {"mae": 0.0, "rmse": 0.0, "r2": 0.0}
+        regression_metrics = {"mae": 0.0, "mse": 0.0, "rmse": 0.0, "r2": 0.0}
     
     metrics = {
         "train_loss": total_loss / len(train_loader) if len(train_loader) > 0 else 0.0,
         "train_los_mae": regression_metrics["mae"],
+        "train_los_mse": regression_metrics["mse"],
         "train_los_rmse": regression_metrics["rmse"],
         "train_los_r2": regression_metrics["r2"],
     }
@@ -302,8 +327,14 @@ def validate_epoch(
                 diagnosis_features = batch["diagnosis_features"].to(device)
                 diagnosis_features = diagnosis_features[valid_mask]
             
+            # Get ICU unit features if available
+            icu_unit_features = None
+            if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
+                icu_unit_features = batch["icu_unit_features"].to(device)
+                icu_unit_features = icu_unit_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features)
+            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
@@ -378,6 +409,7 @@ def validate_epoch(
         return {
             "val_loss": 0.0,
             "val_los_mae": 0.0,
+            "val_los_mse": 0.0,
             "val_los_rmse": 0.0,
             "val_los_r2": 0.0,
         }
@@ -394,6 +426,7 @@ def validate_epoch(
     metrics = {
         "val_loss": avg_loss,
         "val_los_mae": regression_metrics["mae"],
+        "val_los_mse": regression_metrics["mse"],
         "val_los_rmse": regression_metrics["rmse"],
         "val_los_r2": regression_metrics["r2"],
         "val_num_stays": len(stay_aggregated_los_predictions),
@@ -455,7 +488,7 @@ def evaluate_with_detailed_metrics(
     - Compute metrics on stays (one prediction per stay)
     
     For regression, computes:
-    - LOS metrics: MAE, RMSE, R², Median Absolute Error, Percentile Errors
+    - LOS metrics: MAE, MSE, RMSE, R², Median Absolute Error, Percentile Errors
     - Mortality metrics: Accuracy, Precision, Recall, F1, AUC
     
     Args:
@@ -469,6 +502,7 @@ def evaluate_with_detailed_metrics(
         LOS regression metrics:
         - los_loss: Average loss
         - los_mae: Mean Absolute Error
+        - los_mse: Mean Squared Error
         - los_rmse: Root Mean Squared Error
         - los_r2: R² Score
         - los_median_ae: Median Absolute Error
@@ -538,8 +572,14 @@ def evaluate_with_detailed_metrics(
                 diagnosis_features = batch["diagnosis_features"].to(device)
                 diagnosis_features = diagnosis_features[valid_mask]
             
+            # Get ICU unit features if available
+            icu_unit_features = None
+            if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
+                icu_unit_features = batch["icu_unit_features"].to(device)
+                icu_unit_features = icu_unit_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features)
+            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
@@ -611,6 +651,7 @@ def evaluate_with_detailed_metrics(
         result = {
             "los_loss": 0.0,
             "los_mae": 0.0,
+            "los_mse": 0.0,
             "los_rmse": 0.0,
             "los_r2": 0.0,
             "los_median_ae": 0.0,
@@ -663,6 +704,7 @@ def evaluate_with_detailed_metrics(
     result = {
         "los_loss": avg_loss,
         "los_mae": float(mae),
+        "los_mse": float(mse),
         "los_rmse": float(rmse),
         "los_r2": float(r2),
         "los_median_ae": float(median_ae),

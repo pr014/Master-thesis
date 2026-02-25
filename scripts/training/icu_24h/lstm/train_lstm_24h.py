@@ -25,21 +25,15 @@ def main():
     
     LOS Regression Task: Predicts continuous LOS in days.
     """
-    # Load configs
-    # Use baseline_with_aug.yaml for regression with data augmentation (no demographic/diagnosis features)
-    base_config_path = Path("configs/icu_24h/baseline_with_aug.yaml")
-    model_config_path = Path("configs/model/lstm/unidirectional/lstm_1layer.yaml")  # Can be changed to lstm_2layer.yaml
+    # Load config (standalone model config with all parameters)
+    model_config_path = Path("configs/model/lstm/unidirectional/lstm_2layer.yaml")  # Using optimized 2-layer config
     
-    config = load_config(
-        base_config_path=base_config_path,
-        model_config_path=model_config_path,
-    )
+    config = load_config(model_config_path=model_config_path)
     
     print("="*60)
     print("Training LSTM1D Unidirectional for 24h Dataset")
     print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
-    print(f"Base config: {base_config_path}")
     print(f"Model config: {model_config_path}")
     print(f"Model type: {config.get('model', {}).get('type', 'unknown')}")
     print(f"Loss type: {config.get('training', {}).get('loss', {}).get('type', 'mse')}")
@@ -61,6 +55,12 @@ def main():
     
     diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
     print(f"Diagnosis features: {diagnosis_config.get('enabled', False)}")
+    
+    icu_unit_config = config.get('data', {}).get('icu_unit_features', {})
+    print(f"ICU unit features: {icu_unit_config.get('enabled', False)}")
+    if icu_unit_config.get('enabled', False):
+        icu_list = icu_unit_config.get('icu_unit_list', [])
+        print(f"  ICU units: {len(icu_list)} + 1 (Other) = {len(icu_list) + 1} features")
     print("="*60)
     
     # Load ICU stays and create mapper
@@ -111,7 +111,6 @@ def main():
     
     # Store config paths for checkpoint saving
     trainer.config_paths = {
-        "base": str(base_config_path.resolve()),
         "model": str(model_config_path.resolve()),
     }
     

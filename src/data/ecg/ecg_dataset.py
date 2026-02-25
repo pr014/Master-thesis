@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .ecg_loader import ECGDemoDataset, build_demo_index, ECGNPYDataset
+from ..labeling.icu_los_labels import los_to_bin
 
 
 def extract_subject_id_from_path(base_path: str) -> int:
@@ -75,6 +76,8 @@ class ECGDataset(Dataset):
         data_dir: Optional[str] = None,
         demographic_features_config: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
+        regression_weights: Optional[Dict[int, float]] = None,
+        los_binning: Optional[Dict[str, Any]] = None,
     ):
         """Initialize ECG Dataset.
         
@@ -91,6 +94,8 @@ class ECGDataset(Dataset):
             demographic_features_config: Optional config dict for demographic features (Age & Sex).
                                         Should contain 'enabled', 'records_csv_path', etc.
             config: Optional full configuration dictionary. Used to read task_type settings.
+            regression_weights: Optional dict mapping LOS bin_idx -> weight for sample weighting.
+            los_binning: Optional config for binning (strategy, max_days) for weight lookup.
         """
         # Use ECGNPYDataset if records contain 'npy_path', otherwise use ECGDemoDataset
         if records and "npy_path" in records[0]:
@@ -151,6 +156,12 @@ class ECGDataset(Dataset):
         
         # Task type: "regression" (default) or "classification" (backward compatibility)
         self.task_type = data_config.get("task_type", "regression")
+        
+        # Regression sample weighting
+        self.regression_weights = regression_weights
+        los_binning = los_binning or {}
+        self._binning_strategy = los_binning.get("strategy", "intervals")
+        self._binning_max_days = los_binning.get("max_days", 9)
         
         # Statistics
         self.matched_count = 0
@@ -993,6 +1004,18 @@ class ECGDataset(Dataset):
         # Add ICU unit features if available
         if icu_unit_features is not None:
             result["icu_unit_features"] = icu_unit_features
+        
+        # Sample weight for regression (only when weighting is active)
+        if self.regression_weights is not None and label >= 0:
+            bin_idx = los_to_bin(
+                float(label),
+                binning_strategy=self._binning_strategy,
+                max_days=self._binning_max_days,
+            )
+            sample_weight = self.regression_weights.get(bin_idx, 1.0)
+            result["sample_weight"] = torch.tensor(sample_weight, dtype=torch.float32)
+        elif self.regression_weights is not None:
+            result["sample_weight"] = torch.tensor(1.0, dtype=torch.float32)
         
         return result
 

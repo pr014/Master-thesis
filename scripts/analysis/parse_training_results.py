@@ -186,23 +186,30 @@ def _extract_test_block(text: str) -> Optional[str]:
     """
     Extract the block that contains final test metrics.
 
-    We support the summary format:
+    We support multiple formats:
+    1. Deep Learning format:
        📊 TRAINING RESULTS SUMMARY (LOS REGRESSION)
        🔹 LOS Regression Performance:
          ...
-       🔹 Error Percentiles:
-         ...
-       🔹 Mortality (Binary Classification):
-         ...
-       ✅ Checkpoints: ...
+    2. XGBoost format:
+       ============================================================
+       Test Results
+       ============================================================
+       MAE:  2.7836 days
+       ...
     """
-    # Summary section for regression
+    # Summary section for regression (Deep Learning format)
     m = re.search(r"(?ms)^=+\n📊 TRAINING RESULTS SUMMARY.*?LOS REGRESSION.*?\n=+\n(.*?)(?:^=+\n✅ Checkpoints:|^✅ Checkpoints:|^End time:)", text)
     if m:
         return m.group(0)
     
     # Fallback: try without "LOS REGRESSION" in title
     m = re.search(r"(?ms)^=+\n📊 TRAINING RESULTS SUMMARY\n=+\n(.*?)(?:^=+\n✅ Checkpoints:|^✅ Checkpoints:|^End time:)", text)
+    if m:
+        return m.group(0)
+    
+    # XGBoost format: "Test Results" section
+    m = re.search(r"(?ms)^=+\nTest Results\n=+\n(.*?)(?:^=+\n|^Saving model|^Top \d+ Feature|^Training completed|^Job ID:)", text)
     if m:
         return m.group(0)
 
@@ -214,16 +221,45 @@ def _parse_key_metrics(block: str) -> Tuple[Dict[str, float], Optional[int]]:
     num_stays: Optional[int] = None
 
     # Key metrics for LOS REGRESSION
+    # Support both Deep Learning format ("Test LOS MAE:") and XGBoost format ("MAE:")
     patterns = {
         "test_los_loss": r"^\s*Test LOS Loss:\s*(%s)\s*$" % _RE_FLOAT,
-        "test_los_mae": r"^\s*Test LOS MAE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
-        "test_los_rmse": r"^\s*Test LOS RMSE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
-        "test_los_r2": r"^\s*Test LOS R²:\s*(%s)\s*$" % _RE_FLOAT,
-        "test_los_median_ae": r"^\s*Test LOS Median AE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
-        "test_los_p25_error": r"^\s*25th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
-        "test_los_p50_error": r"^\s*50th percentile:\s*(%s)\s*days?\s*\(median\)\s*$" % _RE_FLOAT,
-        "test_los_p75_error": r"^\s*75th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
-        "test_los_p90_error": r"^\s*90th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,
+        "test_los_mae": [
+            r"^\s*Test LOS MAE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*MAE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_mse": [
+            r"^\s*Test LOS MSE:\s*(%s)\s*days²?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*MSE:\s*(%s)\s*days²?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_rmse": [
+            r"^\s*Test LOS RMSE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*RMSE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_r2": [
+            r"^\s*Test LOS R²:\s*(%s)\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*R²:\s*(%s)\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_median_ae": [
+            r"^\s*Test LOS Median AE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*Median AE:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_p25_error": [
+            r"^\s*25th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*P25 Error:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_p50_error": [
+            r"^\s*50th percentile:\s*(%s)\s*days?\s*\(median\)\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*P50 Error:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format (falls vorhanden)
+        ],
+        "test_los_p75_error": [
+            r"^\s*75th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*P75 Error:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
+        "test_los_p90_error": [
+            r"^\s*90th percentile:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # DL format
+            r"^\s*P90 Error:\s*(%s)\s*days?\s*$" % _RE_FLOAT,  # XGBoost format
+        ],
         # Mortality (overall) if multi-task results are printed in the log
         "mortality_accuracy": r"^\s*Accuracy:\s*(%s)\s*$" % _RE_FLOAT,
         "mortality_precision": r"^\s*Precision:\s*(%s)\s*$" % _RE_FLOAT,
@@ -233,9 +269,13 @@ def _parse_key_metrics(block: str) -> Tuple[Dict[str, float], Optional[int]]:
     }
 
     for key, pat in patterns.items():
-        m = re.search(pat, block, flags=re.MULTILINE | re.IGNORECASE)
-        if m:
-            metrics[key] = float(m.group(1))
+        # Handle both single pattern (string) and multiple patterns (list)
+        pattern_list = pat if isinstance(pat, list) else [pat]
+        for pattern in pattern_list:
+            m = re.search(pattern, block, flags=re.MULTILINE | re.IGNORECASE)
+            if m:
+                metrics[key] = float(m.group(1))
+                break  # Use first match
 
     # Extract number of stays
     m = re.search(r"^\s*Test ICU Stays:\s*(\d+)\s*$", block, flags=re.MULTILINE)
@@ -248,6 +288,24 @@ def _parse_key_metrics(block: str) -> Tuple[Dict[str, float], Optional[int]]:
             num_stays = int(m.group(1))
 
     return metrics, num_stays
+
+
+def _extract_validation_block(text: str) -> Optional[str]:
+    """
+    Extract the block that contains validation metrics.
+    
+    Supports XGBoost format:
+       ============================================================
+       Validation Results
+       ============================================================
+       MAE:  2.8702 days
+       ...
+    """
+    # XGBoost format: "Validation Results" section
+    m = re.search(r"(?ms)^=+\nValidation Results\n=+\n(.*?)(?:^=+\n|^Extracting test|^Saving model|^Top \d+ Feature)", text)
+    if m:
+        return m.group(0)
+    return None
 
 
 def parse_log_text(text: str) -> ParsedResults:
@@ -263,8 +321,26 @@ def parse_log_text(text: str) -> ParsedResults:
     if test_block:
         test_metrics, num_stays = _parse_key_metrics(test_block)
     
-    # Extract training/validation metrics from epoch logs
-    train_metrics, val_metrics, training_history = _extract_training_metrics(text)
+    # Extract validation metrics from XGBoost format if available
+    val_block = _extract_validation_block(text)
+    val_metrics: Dict[str, float] = {}
+    if val_block:
+        val_parsed, _ = _parse_key_metrics(val_block)
+        # Rename keys from test_* to val_*
+        for key, value in val_parsed.items():
+            if key.startswith("test_"):
+                val_key = key.replace("test_", "val_")
+                val_metrics[val_key] = value
+            else:
+                val_metrics[key] = value
+    
+    # Extract training/validation metrics from epoch logs (for DL models)
+    train_metrics, val_metrics_epoch, training_history = _extract_training_metrics(text)
+    
+    # Merge validation metrics (XGBoost format takes precedence if both exist)
+    if val_metrics:
+        val_metrics_epoch.update(val_metrics)
+    val_metrics = val_metrics_epoch
 
     return ParsedResults(
         job_id=job_id,
@@ -326,6 +402,8 @@ def main() -> None:
                 # Add unit for MAE/RMSE/Median AE/Percentile errors
                 if any(x in k for x in ['mae', 'rmse', 'median_ae', 'p25', 'p50', 'p75', 'p90']):
                     print(f"  {k}: {value:.4f} days")
+                elif 'mse' in k:
+                    print(f"  {k}: {value:.4f} days²")
                 else:
                     print(f"  {k}: {value:.4f}")
         print(f"num_stays_evaluated: {parsed.num_stays_evaluated}")

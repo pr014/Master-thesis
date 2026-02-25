@@ -1,7 +1,9 @@
 """HuBERT-ECG model with self-supervised pretraining for multi-task learning.
 
-Architecture follows the original ecg-fm-benchmarking repository:
-https://github.com/HeartWise-AI/ecg-fm-benchmarking
+Architecture follows the ORIGINAL HuBERT-ECG paper repository:
+https://github.com/Edoar-do/HuBERT-ECG
+
+Paper: "HuBERT-ECG as a self-supervised foundation model for broad and scalable cardiac applications"
 
 Adapted for multi-task learning (LOS regression + Mortality prediction).
 """

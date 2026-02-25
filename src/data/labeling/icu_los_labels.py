@@ -44,6 +44,10 @@ def load_icustays(icustays_path: str) -> pd.DataFrame:
     # hadm_id is optional but recommended for mortality analysis
     has_hadm_id = 'hadm_id' in df.columns
     
+    # first_careunit / last_careunit optional - needed for ICU unit features
+    has_first_careunit = 'first_careunit' in df.columns
+    has_last_careunit = 'last_careunit' in df.columns
+    
     # Convert types
     df['subject_id'] = df['subject_id'].astype(int)
     df['stay_id'] = df['stay_id'].astype(int)
@@ -53,11 +57,15 @@ def load_icustays(icustays_path: str) -> pd.DataFrame:
     df['outtime'] = pd.to_datetime(df['outtime'])
     df['los'] = df['los'].astype(float)
     
-    # Select columns (include hadm_id if available)
+    # Select columns (preserve first_careunit/last_careunit for ICU unit features)
+    base_cols = ['subject_id', 'stay_id', 'intime', 'outtime', 'los']
     if has_hadm_id:
-        df = df[['subject_id', 'hadm_id', 'stay_id', 'intime', 'outtime', 'los']].copy()
-    else:
-        df = df[['subject_id', 'stay_id', 'intime', 'outtime', 'los']].copy()
+        base_cols = ['subject_id', 'hadm_id', 'stay_id', 'intime', 'outtime', 'los']
+    if has_first_careunit:
+        base_cols.append('first_careunit')
+    if has_last_careunit:
+        base_cols.append('last_careunit')
+    df = df[[c for c in base_cols if c in df.columns]].copy()
     
     # Sort by subject_id and intime for efficient lookup
     df = df.sort_values(['subject_id', 'intime']).reset_index(drop=True)
@@ -172,13 +180,13 @@ def los_to_bin(los_days: float, binning_strategy: str = "intervals", max_days: i
     """Convert LOS (days) to bin class.
     
     Supports two binning strategies:
-    1. "intervals": [0,1), [1,2), [2,3), ..., [9, +inf) => 10 classes (old)
-    2. "exact_days": 1 day [0,1), 2 days [1,2), ..., max_days days [max_days-1, max_days), >= max_days+1 [max_days, +inf) => max_days+1 classes (new)
+    1. "intervals": [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf) => max_days+1 classes
+    2. "exact_days": 1 day [0,1), 2 days [1,2), ..., max_days days [max_days-1, max_days), >= max_days+1 [max_days, +inf) => max_days+1 classes
     
     Args:
         los_days: Length of stay in days (float).
         binning_strategy: "intervals" or "exact_days" (default: "intervals")
-        max_days: Maximum number of exact day classes for "exact_days" strategy (default: 9)
+        max_days: For "intervals": upper bound of last day bin (default 9). For "exact_days": max day classes.
     
     Returns:
         Class index (range depends on strategy).
@@ -187,10 +195,10 @@ def los_to_bin(los_days: float, binning_strategy: str = "intervals", max_days: i
         return 0  # Invalid, default to bin 0
     
     if binning_strategy == "intervals":
-        # Old strategy: [0,1), [1,2), ..., [9, +inf) => 10 classes
-        if los_days >= 9:
-            return 9  # [9, +inf)
-        return int(np.floor(los_days))  # [0,1), [1,2), ..., [8,9)
+        # [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf) => max_days+1 classes
+        if los_days >= max_days:
+            return max_days  # [max_days, +inf)
+        return int(np.floor(los_days))  # [0,1), [1,2), ..., [max_days-1, max_days)
     
     elif binning_strategy == "exact_days":
         # New strategy: exactly 1 day, 2 days, ..., max_days days, >= max_days+1
@@ -321,7 +329,7 @@ def get_num_classes_from_config(config: Dict[str, Any]) -> Optional[int]:
     max_days = los_binning_config.get("max_days", 9)
     
     if strategy == "intervals":
-        return 10  # [0,1), [1,2), ..., [9, +inf)
+        return max_days + 1  # [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf)
     elif strategy == "exact_days":
         return max_days + 1  # 1 day, 2 days, ..., max_days days, >= max_days+1
     else:
@@ -357,8 +365,8 @@ def get_class_labels_from_config(config: Dict[str, Any]) -> List[str]:
     max_days = los_binning_config.get("max_days", 9)
     
     if strategy == "intervals":
-        labels = [f"[{i},{i+1})" for i in range(9)]
-        labels.append("[9, +inf)")
+        labels = [f"[{i},{i+1})" for i in range(max_days)]
+        labels.append(f"[{max_days}, +inf)")
         return labels
     elif strategy == "exact_days":
         labels = [f"{i} day" if i == 1 else f"{i} days" for i in range(1, max_days + 1)]

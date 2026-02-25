@@ -1,0 +1,117 @@
+# XGBoost with DL Features - LOS Regression
+# Configuration for training XGBoost with features extracted from trained DL models
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+seed: 42
+
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # LOS task type: REGRESSION
+  los_task: "regression"  # "regression" or "classification"
+  
+  # Data splitting strategy (temporal split only)
+  split_strategy: "temporal_stratified"  # "temporal" or "temporal_stratified"
+  
+  # Preprocessing (same for all models)
+  preprocessing:
+    target_sampling_rate: 500.0  # Resample to 500 Hz
+    window_seconds: 10.0  # Segment to 10 seconds (5000 samples at 500 Hz)
+    filter_type: "bandpass"  # Bandpass filter (0.5-50 Hz, Butterworth 4th order)
+    filter_lowcut: 0.5  # Low cutoff frequency in Hz
+    filter_highcut: 50.0  # High cutoff frequency in Hz
+    filter_order: 4  # Butterworth filter order
+    normalize: "zscore"  # Z-score normalization per lead
+  
+  # Data augmentation (disabled for classical ML - features extracted from raw signals)
+  augmentation:
+    enabled: false
+  
+  # Demographic features (Age & Sex)
+  demographic_features:
+    enabled: false  # Set to true to include Age and Sex features
+  
+  # Diagnosis features (Top 15 ICD-10 codes)
+  diagnosis_features:
+    enabled: false  # Set to true to include diagnosis features
+
+# =============================================================================
+# FEATURE EXTRACTION SETTINGS
+# =============================================================================
+
+features:
+  feature_type: "dl_features"  # "handcrafted" or "dl_features"
+  dl_model_checkpoint: "outputs/checkpoints/ResNet1D14_best_3023299.pt"  # Path to trained DL model checkpoint
+  dl_model_type: "ResNet1D14"  # Model type: "CNNScratch", "ResNet1D14", "EfficientNet1D_B1", "XResNet1D101", "LSTM1D", "LSTM1D_Bidirectional", "HybridCNNLSTM"
+  use_demographics: false  # Include demographic features (Age, Sex)
+  use_diagnoses: false  # Include diagnosis features (Top 15 ICD-10 codes)
+
+# =============================================================================
+# MODEL ARCHITECTURE (for DL feature extraction)
+# =============================================================================
+
+model:
+  type: "ResNet1D14"  # Must match dl_model_type above
+  num_classes: 10  # Not used for regression, but required for model loading
+
+# =============================================================================
+# XGBOOST HYPERPARAMETERS
+# =============================================================================
+# Hyperparameters based on XGBoost best practices and literature:
+# - Chen & Guestrin (2016): "XGBoost: A Scalable Tree Boosting System" (KDD 2016)
+# - XGBoost Documentation: https://xgboost.readthedocs.io/
+# - Common practice: Conservative values with regularization for medical/regression tasks
+#
+# Rationale:
+# - learning_rate (0.1): Lower than default (0.3) for better generalization (Friedman, 2001)
+# - max_depth (6): Default value, balances model complexity and overfitting
+# - subsample (0.8): Row subsampling for regularization (prevents overfitting)
+# - colsample_bytree (0.8): Column subsampling for regularization (feature diversity)
+# - n_estimators (200): Higher than default (100) to compensate for lower learning_rate
+# - early_stopping_rounds (20): Prevents overfitting on validation set
+
+xgboost:
+  n_estimators: 200  # Number of boosting rounds (higher than default 100 to compensate for lower learning_rate)
+  max_depth: 6  # Maximum tree depth (default value, balances complexity and overfitting)
+  learning_rate: 0.1  # Learning rate (eta) - lower than default 0.3 for better generalization (Friedman, 2001)
+  subsample: 0.8  # Row subsampling ratio (regularization to prevent overfitting)
+  colsample_bytree: 0.8  # Column subsampling ratio (regularization for feature diversity)
+  early_stopping_rounds: 20  # Early stopping rounds (prevents overfitting on validation set)
+  n_jobs: -1  # Number of parallel threads (-1 = all cores)
+  tree_method: "hist"  # Tree construction method (histogram-based, efficient for large datasets)
+  verbosity: 1  # Verbosity level (0=silent, 1=warning, 2=info, 3=debug)
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1  # Fraction of data for validation (10% for 80-10-10 split)
+
+test_split: 0.1  # Fraction of data for testing (10% for 80-10-10 split)
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_best: true  # Save best model based on validation metric
+
+logging:
+  log_dir: "outputs/logs"
+

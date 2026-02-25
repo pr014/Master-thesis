@@ -6,6 +6,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class WeightedMSELoss(nn.Module):
+    """MSE loss with optional per-sample weights for imbalanced regression."""
+
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        weight: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        loss = F.mse_loss(pred, target, reduction="none")
+        if weight is not None:
+            weight = weight.to(loss.device)
+            if weight.dim() < loss.dim():
+                weight = weight.expand_as(loss)
+            return (weight * loss).sum() / weight.sum().clamp(min=1e-8)
+        return loss.mean()
+
+
 def get_loss(config: Dict[str, Any]) -> nn.Module:
     """Get loss function from config.
     
@@ -21,15 +39,17 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
     # Check task type - regression or classification
     data_config = config.get("data", {})
     task_type = data_config.get("task_type", "regression")  # Default to regression
-    
+    use_weighted = loss_config.get("weighted", False)
+
     if task_type == "regression" or loss_type == "mse":
-        # MSE Loss for regression
+        if use_weighted:
+            return WeightedMSELoss()
         return nn.MSELoss()
     
     elif loss_type == "l1" or loss_type == "mae":
         # L1 Loss (Mean Absolute Error) for regression
         return nn.L1Loss()
-    
+
     elif loss_type == "huber":
         # Huber Loss (smooth L1) for regression - robust to outliers
         delta = loss_config.get("delta", 1.0)
@@ -111,6 +131,7 @@ class MultiTaskLoss(nn.Module):
         los_labels: torch.Tensor,
         mortality_probs: torch.Tensor,
         mortality_labels: torch.Tensor,
+        los_sample_weights: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Compute combined multi-task loss.
         
@@ -119,6 +140,7 @@ class MultiTaskLoss(nn.Module):
             los_labels: LOS labels of shape (B,) - continuous values in days (float32).
             mortality_probs: Mortality probabilities of shape (B, 1) in range [0, 1].
             mortality_labels: Mortality labels of shape (B,) with values 0 or 1.
+            los_sample_weights: Optional per-sample weights for LOS loss (B,).
         
         Returns:
             Dictionary with:
@@ -131,16 +153,19 @@ class MultiTaskLoss(nn.Module):
             los_predictions = los_predictions.squeeze(-1)
         
         # Filter valid samples for LOS (los_label >= 0 means it's available)
-        # For regression, we use a threshold like -1 to indicate invalid
         los_valid_mask = los_labels >= 0
         
         if los_valid_mask.any():
             los_predictions_valid = los_predictions[los_valid_mask]
             los_labels_valid = los_labels[los_valid_mask].float()
             
-            # Compute LOS regression loss
+            # Compute LOS regression loss per sample
             los_loss_per_sample = self.los_loss_fn(los_predictions_valid, los_labels_valid)
-            los_loss_value = los_loss_per_sample.mean()
+            if los_sample_weights is not None:
+                weights_valid = los_sample_weights[los_valid_mask].to(los_loss_per_sample.device)
+                los_loss_value = (weights_valid * los_loss_per_sample).sum() / weights_valid.sum().clamp(min=1e-8)
+            else:
+                los_loss_value = los_loss_per_sample.mean()
         else:
             los_loss_value = torch.tensor(0.0, device=los_predictions.device)
         

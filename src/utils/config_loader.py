@@ -134,25 +134,29 @@ def load_config(
     """Load and merge configuration files hierarchically.
     
     Configuration hierarchy (lowest to highest priority):
-    1. base/default.yaml
-    2. model/[model_name].yaml
-    3. experiment/[experiment_name].yaml
+    1. base_config_path (if provided)
+    2. model_config_path (if provided)
+    3. experiment_config_path (if provided)
     4. Environment variables (for paths)
     
+    If only model_config_path is provided (and base_config_path is None),
+    the model config is loaded as a standalone complete configuration.
+    This supports the new config structure where each model config contains
+    all parameters (data, preprocessing, augmentation, training, model).
+    
     Args:
-        base_config_path: Path to base configuration (default: configs/base/default.yaml).
-        model_config_path: Path to model-specific configuration.
+        base_config_path: Path to base configuration (optional, no default).
+        model_config_path: Path to model-specific configuration (can be standalone).
         experiment_config_path: Path to experiment-specific configuration.
         expand_paths: Whether to expand paths using environment variables (default: True).
         base_dir: Base directory for resolving relative paths (default: current working directory).
     
     Returns:
         dict: Merged configuration dictionary with expanded paths.
-    """
-    # Default base config path
-    if base_config_path is None:
-        base_config_path = Path("configs/base/default.yaml")
     
+    Raises:
+        ValueError: If neither base_config_path nor model_config_path is provided.
+    """
     # Use project root as base_dir if not specified
     if base_dir is None:
         # Try to find project root (directory containing configs/)
@@ -165,13 +169,28 @@ def load_config(
         else:
             base_dir = Path.cwd()
     
-    # Load base config
-    config = load_yaml(base_config_path)
+    # Initialize config
+    config = {}
     
-    # Merge model config if provided
+    # Load base config if provided
+    if base_config_path is not None:
+        config = load_yaml(base_config_path)
+    
+    # Load and merge model config
     if model_config_path is not None:
         model_config = load_yaml(model_config_path)
-        config = merge_configs(config, model_config)
+        if config:
+            # Merge with base config
+            config = merge_configs(config, model_config)
+        else:
+            # Use model config as standalone complete config
+            config = model_config
+    
+    # Ensure we have some configuration
+    if not config:
+        raise ValueError(
+            "At least one of base_config_path or model_config_path must be provided"
+        )
     
     # Merge experiment config if provided
     if experiment_config_path is not None:

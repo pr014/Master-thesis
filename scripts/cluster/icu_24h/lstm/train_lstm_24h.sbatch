@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lstm_uni_24h_reg
+#SBATCH --job-name=lstm_uni_24h
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=03:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)

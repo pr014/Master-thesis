@@ -1,9 +1,90 @@
-# Hybrid CNN-LSTM model-specific configuration
-# Merges with baseline.yaml
+# Hybrid CNN-LSTM - Vollständige Konfiguration
+# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# Improved architecture with mean pooling and dropout between LSTM layers
+# Consistent with Bidirectional LSTM model implementation
+
+# =============================================================================
+# GENERAL SETTINGS
+# =============================================================================
+
+# Random seed for reproducibility
+seed: 42
+
+# Device settings
+device:
+  device: null  # null = auto-select (CUDA if available, else CPU)
+  deterministic: false
+
+# =============================================================================
+# DATA SETTINGS
+# =============================================================================
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+  sampling_rate: 500.0  # Hz
+  window_seconds: 10.0  # seconds
+  num_leads: 12  # 12-lead ECG
+  
+  # LOS task type: REGRESSION
+  los_task: "regression"  # "regression" or "classification"
+  
+  # Data splitting strategy (temporal split only)
+  split_strategy: "temporal_stratified"
+  
+  # Preprocessing
+  preprocessing:
+    target_sampling_rate: 500.0
+    window_seconds: 10.0
+    filter_type: "bandpass"
+    filter_lowcut: 0.5
+    filter_highcut: 50.0
+    filter_order: 4
+    normalize: "zscore"
+  
+  # Data augmentation
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: true
+    scale_min: 0.85
+    scale_max: 1.15
+  
+  # Demographic features - DISABLED
+  demographic_features:
+    enabled: false
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+  
+  # Diagnosis features - DISABLED
+  diagnosis_features:
+    enabled: false
+  
+  # ICU Unit Features ENABLED
+  icu_unit_features:
+    enabled: true
+    encoding: "onehot"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    unknown_strategy: "other"
+    missing_strategy: "most_common"
+
+# =============================================================================
+# MODEL ARCHITECTURE
+# =============================================================================
 
 model:
   type: "HybridCNNLSTM"
-  num_classes: 10
+  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
+                  # Note: For regression, this is ignored (output_dim = 1)
 
   # CNN block parameters (default architecture)
   conv1_out: 32
@@ -14,9 +95,108 @@ model:
   conv3_kernel: 3
   # Padding defaults to kernel//2 for same-length conv
 
-  # LSTM parameters
-  hidden_dim: 128  # per direction
-  hidden_dim_layer2: 128
-  num_layers: 2
-  bidirectional: true
-  pooling: "last"
+  # LSTM parameters (consistent with Bidirectional LSTM model)
+  # Architecture: 2-Layer Bidirectional LSTM
+  # Layer 1: 128 per direction → 256 output
+  # Layer 2: 128 per direction → 256 output (input is 256 from Layer 1)
+  # Dropout between layers prevents overfitting
+  hidden_dim: 128  # Hidden dimension per direction for Layer 1 (forward + backward = 256 total)
+  hidden_dim_layer2: 128  # Hidden dimension per direction for Layer 2 (keep same as Layer 1)
+  num_layers: 2  # Number of LSTM layers (hierarchical temporal dependencies)
+  lstm_dropout: 0.4  # Dropout between LSTM layers (prevents overfitting)
+  bidirectional: true  # Bidirectional LSTM (enforced in model)
+  
+  # Pooling Strategy
+  # "mean": Aggregates information across all timesteps (recommended)
+  # "last": Only uses last hidden state (discards 99.98% of information)
+  # "max": Maximum pooling over time dimension
+  # Scientific justification: Lin et al. (2013) demonstrate mean pooling improves LSTM performance
+  pooling: "mean"
+
+# =============================================================================
+# TRAINING HYPERPARAMETERS
+# =============================================================================
+
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 4
+  pin_memory: true
+  
+  optimizer:
+    type: "Adam"
+    lr: 2e-4
+    weight_decay: 2e-4
+    betas: [0.9, 0.999]
+  
+  gradient_clip_norm: 1.0
+  dropout_rate: 0.4
+  
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 7
+    min_lr: 1e-6
+  
+  loss:
+    type: "mse"
+
+# =============================================================================
+# VALIDATION & TEST SETTINGS
+# =============================================================================
+
+validation:
+  val_split: 0.1
+  val_frequency: 1
+
+test_split: 0.1
+
+# =============================================================================
+# EARLY STOPPING
+# =============================================================================
+
+early_stopping:
+  enabled: true
+  patience: 12
+  monitor: "val_loss"
+  mode: "min"
+
+# =============================================================================
+# CHECKPOINTING & LOGGING
+# =============================================================================
+
+checkpoint:
+  save_dir: "outputs/checkpoints"
+  save_frequency: 1
+  save_best: true
+  metric: "val_loss"
+
+logging:
+  log_dir: "outputs/logs"
+  use_tensorboard: true
+  log_frequency: 10
+
+# =============================================================================
+# EVALUATION METRICS
+# =============================================================================
+
+evaluation:
+  metrics:
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "median_ae"
+    - "accuracy"
+    - "auc_roc"
+
+# =============================================================================
+# MULTI-TASK LEARNING
+# =============================================================================
+
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
+  mortality_use_weighted_loss: false
+  mortality_pos_weight: null
