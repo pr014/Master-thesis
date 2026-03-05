@@ -201,6 +201,69 @@ class BaselineWander(nn.Module):
         return result
 
 
+class LeadDropout(nn.Module):
+    """Randomly zero out individual ECG leads.
+
+    Each lead is independently set to zero with probability ``dropout_prob``.
+    Simulates missing or defective electrode contacts, which are common in
+    clinical practice.  At least one lead is always kept to avoid a fully
+    silent signal.
+    """
+
+    def __init__(self, dropout_prob: float = 0.1):
+        """Initialize lead dropout augmentation.
+
+        Args:
+            dropout_prob: Probability that each individual lead is zeroed out
+                (default: 0.1, i.e. ~1 of 12 leads on average).
+        """
+        super().__init__()
+        self.dropout_prob = dropout_prob
+
+    def forward(self, signal: torch.Tensor) -> torch.Tensor:
+        """Apply lead dropout.
+
+        Args:
+            signal: ECG signal tensor of shape (C, T) or (B, C, T).
+
+        Returns:
+            Signal with randomly zeroed leads, same shape as input.
+        """
+        if not self.training:
+            return signal
+
+        if torch.isnan(signal).any() or torch.isinf(signal).any():
+            return signal
+
+        if signal.dim() == 2:  # (C, T)
+            num_leads = signal.shape[0]
+            mask = torch.bernoulli(
+                torch.full((num_leads,), 1.0 - self.dropout_prob, device=signal.device)
+            )
+            # Ensure at least one lead survives
+            if mask.sum() == 0:
+                mask[torch.randint(num_leads, (1,))] = 1.0
+            result = signal * mask.unsqueeze(1)
+        else:  # (B, C, T)
+            batch_size, num_leads = signal.shape[0], signal.shape[1]
+            mask = torch.bernoulli(
+                torch.full(
+                    (batch_size, num_leads), 1.0 - self.dropout_prob, device=signal.device
+                )
+            )
+            # Ensure at least one lead per sample survives
+            zero_rows = mask.sum(dim=1) == 0
+            if zero_rows.any():
+                rand_leads = torch.randint(num_leads, (zero_rows.sum().item(),), device=signal.device)
+                mask[zero_rows, rand_leads] = 1.0
+            result = signal * mask.unsqueeze(2)
+
+        if torch.isnan(result).any() or torch.isinf(result).any():
+            return signal
+
+        return result
+
+
 class ECGAugmentation(nn.Module):
     """Composable ECG augmentation transform.
     
@@ -220,6 +283,13 @@ class ECGAugmentation(nn.Module):
         amplitude_scaling: bool = False,
         scale_min: float = 0.85,
         scale_max: float = 1.15,
+        baseline_wander: bool = False,
+        bw_freq_min: float = 0.15,
+        bw_freq_max: float = 0.4,
+        bw_amp_min: float = 0.03,
+        bw_amp_max: float = 0.08,
+        lead_dropout: bool = False,
+        lead_dropout_prob: float = 0.1,
         sampling_rate: float = 500.0,
     ):
         """Initialize ECG augmentation.
@@ -230,6 +300,13 @@ class ECGAugmentation(nn.Module):
             amplitude_scaling: Enable amplitude scaling.
             scale_min: Minimum scaling factor.
             scale_max: Maximum scaling factor.
+            baseline_wander: Enable baseline wander augmentation.
+            bw_freq_min: Minimum baseline wander frequency in Hz.
+            bw_freq_max: Maximum baseline wander frequency in Hz.
+            bw_amp_min: Minimum baseline wander amplitude.
+            bw_amp_max: Maximum baseline wander amplitude.
+            lead_dropout: Enable lead dropout augmentation.
+            lead_dropout_prob: Probability of zeroing out each individual lead.
             sampling_rate: ECG sampling rate (Hz).
         """
         super().__init__()
@@ -241,6 +318,18 @@ class ECGAugmentation(nn.Module):
         
         if amplitude_scaling:
             self.transforms.append(AmplitudeScaling(scale_min=scale_min, scale_max=scale_max))
+
+        if baseline_wander:
+            self.transforms.append(BaselineWander(
+                freq_min=bw_freq_min,
+                freq_max=bw_freq_max,
+                amp_min=bw_amp_min,
+                amp_max=bw_amp_max,
+                sampling_rate=sampling_rate,
+            ))
+
+        if lead_dropout:
+            self.transforms.append(LeadDropout(dropout_prob=lead_dropout_prob))
     
     def forward(self, signal: torch.Tensor) -> torch.Tensor:
         """Apply augmentations sequentially.
@@ -280,6 +369,13 @@ def create_augmentation_transform(config: Dict[str, Any]) -> Optional[Callable]:
         amplitude_scaling=aug_config.get("amplitude_scaling", False),
         scale_min=aug_config.get("scale_min", 0.85),
         scale_max=aug_config.get("scale_max", 1.15),
+        baseline_wander=aug_config.get("baseline_wander", False),
+        bw_freq_min=aug_config.get("bw_freq_min", 0.15),
+        bw_freq_max=aug_config.get("bw_freq_max", 0.4),
+        bw_amp_min=aug_config.get("bw_amp_min", 0.03),
+        bw_amp_max=aug_config.get("bw_amp_max", 0.08),
+        lead_dropout=aug_config.get("lead_dropout", False),
+        lead_dropout_prob=aug_config.get("lead_dropout_prob", 0.1),
         sampling_rate=config.get("data", {}).get("sampling_rate", 500.0),
     )
 

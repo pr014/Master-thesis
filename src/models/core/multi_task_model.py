@@ -9,7 +9,7 @@ from .base_model import BaseECGModel
 class MultiTaskECGModel(nn.Module):
     """Wrapper for existing ECG models to add mortality prediction head.
     
-    This wrapper takes a base model (e.g., CNNScratch, ResNet1D14) and adds
+    This wrapper takes a base model (e.g., CNNScratch, HybridCNNLSTM) and adds
     a second output head for mortality prediction while keeping the original
     LOS head (now for regression).
     

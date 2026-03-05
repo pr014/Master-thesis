@@ -699,7 +699,24 @@ def evaluate_with_detailed_metrics(
     p50_error = np.percentile(absolute_errors, 50)  # Same as median
     p75_error = np.percentile(absolute_errors, 75)
     p90_error = np.percentile(absolute_errors, 90)
-    
+
+    # ===== SUBGROUP METRICS: LOS <= 10 days =====
+    mask_leq10 = labels_np <= 10.0
+    n_leq10 = int(mask_leq10.sum())
+    if n_leq10 > 0:
+        preds_leq10 = predictions_np[mask_leq10]
+        labels_leq10 = labels_np[mask_leq10]
+        ae_leq10 = np.abs(preds_leq10 - labels_leq10)
+        mae_leq10 = float(ae_leq10.mean())
+        mse_leq10 = float(((preds_leq10 - labels_leq10) ** 2).mean())
+        rmse_leq10 = float(np.sqrt(mse_leq10))
+        median_ae_leq10 = float(np.median(ae_leq10))
+        ss_res_leq10 = ((labels_leq10 - preds_leq10) ** 2).sum()
+        ss_tot_leq10 = ((labels_leq10 - labels_leq10.mean()) ** 2).sum()
+        r2_leq10 = float(1 - ss_res_leq10 / ss_tot_leq10) if ss_tot_leq10 > 0 else 0.0
+    else:
+        mae_leq10 = rmse_leq10 = mse_leq10 = median_ae_leq10 = r2_leq10 = 0.0
+
     # Build result dictionary with LOS metrics
     result = {
         "los_loss": avg_loss,
@@ -713,6 +730,12 @@ def evaluate_with_detailed_metrics(
         "los_p75_error": float(p75_error),
         "los_p90_error": float(p90_error),
         "num_stays": len(predictions_np),
+        "los_mae_leq10": mae_leq10,
+        "los_mse_leq10": mse_leq10,
+        "los_rmse_leq10": rmse_leq10,
+        "los_r2_leq10": r2_leq10,
+        "los_median_ae_leq10": median_ae_leq10,
+        "los_n_leq10": n_leq10,
     }
     
     # ===== MORTALITY METRICS (if multi-task) =====

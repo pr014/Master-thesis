@@ -1,6 +1,6 @@
-# EfficientNet1D-B1 (From Scratch) - Vollständige Konfiguration
-# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
-# Architecture follows EfficientNet-B1 paper (Tan & Le, 2019)
+# XResNet1D-101 with PTB-XL Pretrained Weights - Transfer Learning
+# LOS Regression + Mortality Classification (Multi-Task)
+# Architecture: 1:1 from ecg_ptbxl_benchmarking, pretrained on PTB-XL (71 SCP classes)
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -21,10 +21,11 @@ data:
   sampling_rate: 500.0
   window_seconds: 10.0
   num_leads: 12
-  
+
   los_task: "regression"
+
   split_strategy: "temporal_stratified"
-  
+
   preprocessing:
     target_sampling_rate: 500.0
     window_seconds: 10.0
@@ -33,7 +34,7 @@ data:
     filter_highcut: 50.0
     filter_order: 4
     normalize: "zscore"
-  
+
   augmentation:
     enabled: true
     gaussian_noise: true
@@ -41,28 +42,58 @@ data:
     amplitude_scaling: true
     scale_min: 0.85
     scale_max: 1.15
-  
+    baseline_wander: false
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08
+    lead_dropout: false
+    lead_dropout_prob: 0.1
+
   demographic_features:
     enabled: false
-  
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+
   diagnosis_features:
     enabled: false
+
+  icu_unit_features:
+    enabled: false
+    encoding: "onehot"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    unknown_strategy: "other"
+    missing_strategy: "most_common"
 
 # =============================================================================
 # MODEL ARCHITECTURE
 # =============================================================================
 
 model:
-  type: "EfficientNet1D_B1"
-  num_classes: 10  # LOS bin classification: [0,1), [1,2), ..., [9, +inf) = 10 classes
-  
-  # EfficientNet1D-B1-specific architecture parameters
-  # Architecture follows EfficientNet-B1 paper (Tan & Le, 2019)
-  # ~7.8M parameters
-  
-  # Pretrained weights configuration
+  type: "XResNetPTBXL"
+  num_classes: 10  # ignored for regression
+
+  # XResNet1D-101 (PTB-XL architecture)
+  kernel_size: 5
+  ps_head: 0.5
+  lin_ftrs_head: [128]
+
+  # Pretrained weights from PTB-XL
   pretrained:
-    enabled: false  # Train from scratch (no pretrained weights)
+    enabled: true
+    checkpoint_path: "data/pretrained_weights/PTB-Xl-analysis/fastai_xresnet1d101.pth"
+
+  # Optional: freeze backbone for first N epochs (0 = no freezing)
+  freeze_backbone_epochs: 0
 
 # =============================================================================
 # TRAINING HYPERPARAMETERS
@@ -73,24 +104,25 @@ training:
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "Adam"
     lr: 5e-4
     weight_decay: 1e-4
     betas: [0.9, 0.999]
-  
+
   gradient_clip_norm: 1.0
   dropout_rate: 0.3
-  
+
   scheduler:
     type: "ReduceLROnPlateau"
     factor: 0.1
     patience: 5
     min_lr: 1e-6
-  
+
   loss:
     type: "mse"
+    weighted: false
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

@@ -37,9 +37,16 @@ data:
     filter_order: 4  # Butterworth filter order
     normalize: "zscore"  # Z-score normalization per lead
   
-  # Data augmentation (disabled for classical ML - features extracted from raw signals)
+  # Data augmentation (enabled for fair comparison with DL models; augments raw signals before feature extraction)
   augmentation:
-    enabled: false
+    enabled: true
+    gaussian_noise: true
+    noise_std: 0.03  # 3% of signal std (AG1)
+    amplitude_scaling: true
+    scale_min: 0.85  # 85-115% (AG1)
+    scale_max: 1.15
+    baseline_wander: false
+    lead_dropout: false
   
   # Demographic features (Age & Sex)
   demographic_features:
@@ -48,6 +55,16 @@ data:
   # Diagnosis features (Top 15 ICD-10 codes)
   diagnosis_features:
     enabled: false  # Set to true to include diagnosis features
+
+# =============================================================================
+# MULTI-TASK: MORTALITY PREDICTION
+# =============================================================================
+multi_task:
+  enabled: true
+  admissions_path: "data/labeling/labels_csv/admissions.csv"
+
+# Augmentation multiplier for training (number of augmented copies to add)
+augmentation_multiplier: 2  # 2x train size = original + 1 augmented pass
 
 # =============================================================================
 # FEATURE EXTRACTION SETTINGS
@@ -84,6 +101,19 @@ xgboost:
   n_jobs: -1  # Number of parallel threads (-1 = all cores)
   tree_method: "hist"  # Tree construction method (histogram-based, efficient for large datasets)
   verbosity: 1  # Verbosity level (0=silent, 1=warning, 2=info, 3=debug)
+
+# XGBoost Classifier for Mortality (used when multi_task.enabled=true)
+xgboost_mortality:
+  n_estimators: 100
+  max_depth: 4
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  early_stopping_rounds: 10
+  n_jobs: -1
+  tree_method: "hist"
+  verbosity: 1
+  scale_pos_weight: "auto"  # Balance imbalanced mortality
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

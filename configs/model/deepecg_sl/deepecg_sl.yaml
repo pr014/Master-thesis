@@ -43,6 +43,13 @@ data:
     amplitude_scaling: true
     scale_min: 0.85
     scale_max: 1.15
+    baseline_wander: true
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08
+    lead_dropout: true
+    lead_dropout_prob: 0.1
   
   demographic_features:
     enabled: false
@@ -133,7 +140,9 @@ training:
     min_lr: 1e-6
   
   loss:
-    type: "mse"
+    type: "huber"
+    delta: 1.0
+    weighted: false
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

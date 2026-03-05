@@ -50,7 +50,7 @@ data:
     enabled: false
   
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     icu_unit_list:
       - "Medical Intensive Care Unit (MICU)"
@@ -114,7 +114,9 @@ training:
     min_lr: 1e-6
   
   loss:
-    type: "mse"
+    type: "huber"
+    delta: 1.0
+    weighted: false
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

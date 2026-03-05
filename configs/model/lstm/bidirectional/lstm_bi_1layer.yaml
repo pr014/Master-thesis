@@ -47,6 +47,9 @@ data:
   
   diagnosis_features:
     enabled: false
+  
+  icu_unit_features:
+    enabled: false
 
 # =============================================================================
 # MODEL ARCHITECTURE
@@ -100,6 +103,8 @@ training:
   
   loss:
     type: "mse"
+    weighted: true
+    method: "balanced"
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

@@ -94,6 +94,7 @@ class MultiTaskLoss(nn.Module):
         los_loss_weight: float = 1.0,
         mortality_loss_weight: float = 1.0,
         los_loss_type: str = "mse",
+        huber_delta: float = 1.0,
         mortality_use_weighted: bool = False,
         mortality_pos_weight: Optional[float] = None,
     ):
@@ -103,6 +104,7 @@ class MultiTaskLoss(nn.Module):
             los_loss_weight: Weight for LOS regression loss.
             mortality_loss_weight: Weight for mortality prediction loss.
             los_loss_type: Type of LOS loss ("mse", "l1", "huber").
+            huber_delta: Delta threshold for Huber loss (ignored for mse/l1).
             mortality_use_weighted: Whether to use weighted BCE for mortality.
             mortality_pos_weight: Positive class weight for mortality (if weighted).
         """
@@ -117,7 +119,7 @@ class MultiTaskLoss(nn.Module):
         elif los_loss_type == "l1" or los_loss_type == "mae":
             self.los_loss_fn = nn.L1Loss(reduction='none')
         elif los_loss_type == "huber":
-            self.los_loss_fn = nn.HuberLoss(reduction='none')
+            self.los_loss_fn = nn.HuberLoss(reduction='none', delta=huber_delta)
         else:
             self.los_loss_fn = nn.MSELoss(reduction='none')
         
@@ -225,24 +227,26 @@ def get_multi_task_loss(config: Dict[str, Any]) -> MultiTaskLoss:
     los_loss_weight = multi_task_config.get("los_loss_weight", 1.0)
     mortality_loss_weight = multi_task_config.get("mortality_loss_weight", 1.0)
     
-    # Get LOS loss type (default to MSE for regression)
+    # Get LOS loss type and Huber delta (default to MSE for regression)
     los_loss_config = training_config.get("loss", {})
     los_loss_type = los_loss_config.get("type", "mse")
-    
+    huber_delta = los_loss_config.get("delta", 1.0)
+
     # Check task type - if classification, use cross_entropy compatible loss
     task_type = data_config.get("task_type", "regression")
     if task_type == "classification":
         # For backward compatibility, but we're now using regression
         los_loss_type = "mse"  # Still use MSE as a fallback
-    
+
     # Get mortality loss settings
     mortality_use_weighted = multi_task_config.get("mortality_use_weighted_loss", False)
     mortality_pos_weight = multi_task_config.get("mortality_pos_weight", None)
-    
+
     return MultiTaskLoss(
         los_loss_weight=los_loss_weight,
         mortality_loss_weight=mortality_loss_weight,
         los_loss_type=los_loss_type,
+        huber_delta=huber_delta,
         mortality_use_weighted=mortality_use_weighted,
         mortality_pos_weight=mortality_pos_weight,
     )

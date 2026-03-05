@@ -84,7 +84,13 @@ class CNNScratch(BaseECGModel):
         diagnosis_list = diagnosis_config.get("diagnosis_list", [])
         diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
         
-        # Calculate feature dimension (ECG features + optional demographic + diagnosis features)
+        # Check if ICU unit features are enabled
+        icu_unit_config = data_config.get("icu_unit_features", {})
+        self.use_icu_units = icu_unit_config.get("enabled", False)
+        icu_unit_list = icu_unit_config.get("icu_unit_list", [])
+        icu_unit_dim = len(icu_unit_list) if self.use_icu_units else 0
+        
+        # Calculate feature dimension (ECG features + optional demographic + diagnosis + ICU unit features)
         feature_dim = 128  # ECG features after global pooling
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
@@ -92,6 +98,8 @@ class CNNScratch(BaseECGModel):
             feature_dim += demo_dim
         if self.use_diagnoses:
             feature_dim += diagnosis_dim
+        if self.use_icu_units:
+            feature_dim += icu_unit_dim
         
         # Prediction Head
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -108,7 +116,8 @@ class CNNScratch(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None
+        diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Forward pass.
         
@@ -145,12 +154,14 @@ class CNNScratch(BaseECGModel):
         x = self.global_pool(x)  # (B, 128, 1)
         x = x.squeeze(-1)  # (B, 128)
         
-        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        # Late fusion: Concatenate ECG features with demographic, diagnosis, and ICU unit features
         fused = x
         if self.use_demographics and demographic_features is not None:
             fused = torch.cat([fused, demographic_features], dim=1)
         if self.use_diagnoses and diagnosis_features is not None:
             fused = torch.cat([fused, diagnosis_features], dim=1)
+        if self.use_icu_units and icu_unit_features is not None:
+            fused = torch.cat([fused, icu_unit_features], dim=1)
         
         # Classification Head
         x = self.dropout1(fused)
@@ -165,7 +176,8 @@ class CNNScratch(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None
+        diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Extract features before final classification head.
         
@@ -202,12 +214,14 @@ class CNNScratch(BaseECGModel):
         x = self.global_pool(x)  # (B, 128, 1)
         x = x.squeeze(-1)  # (B, 128)
         
-        # Late fusion: Concatenate ECG features with demographic and diagnosis features
+        # Late fusion: Concatenate ECG features with demographic, diagnosis, and ICU unit features
         fused = x
         if self.use_demographics and demographic_features is not None:
             fused = torch.cat([fused, demographic_features], dim=1)
         if self.use_diagnoses and diagnosis_features is not None:
             fused = torch.cat([fused, diagnosis_features], dim=1)
+        if self.use_icu_units and icu_unit_features is not None:
+            fused = torch.cat([fused, icu_unit_features], dim=1)
         
         # Classification Head (up to fc1)
         x = self.dropout1(fused)

@@ -13,10 +13,8 @@ from torch.utils.data import DataLoader
 from ..utils.config_loader import load_config
 from src.models import (
     CNNScratch,
-    ResNet1D14,
-    EfficientNet1D_B1,
-    XResNet1D101,
     HybridCNNLSTM,
+    XResNetPTBXL,
 )
 from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
 from src.models.core.multi_task_model import MultiTaskECGModel
@@ -48,18 +46,14 @@ def load_model_from_checkpoint(
     # Create model based on type
     if model_type == "cnnscratch":
         base_model = CNNScratch(config)
-    elif model_type == "resnet1d14":
-        base_model = ResNet1D14(config)
-    elif model_type == "efficientnet1d_b1":
-        base_model = EfficientNet1D_B1(config)
-    elif model_type == "xresnet1d101":
-        base_model = XResNet1D101(config)
     elif model_type == "lstm1d":
         base_model = LSTM1D_Unidirectional(config)
     elif model_type == "lstm1d_bidirectional":
         base_model = LSTM1D_Bidirectional(config)
     elif model_type == "hybridcnnlstm":
         base_model = HybridCNNLSTM(config)
+    elif model_type == "xresnetptbxl":
+        base_model = XResNetPTBXL(config)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     

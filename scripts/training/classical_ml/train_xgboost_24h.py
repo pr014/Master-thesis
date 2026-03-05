@@ -26,18 +26,9 @@ def extract_features_from_dataloader(
     """
     Extract features from DataLoader.
     
-    Args:
-        dataloader: PyTorch DataLoader with ECG signals.
-        feature_type: "handcrafted" or "dl_features".
-        config: Configuration dictionary.
-        device: Device for DL feature extraction (if needed).
-    
     Returns:
-        Tuple of (X_features, y_los, demographic_features, diagnosis_features):
-        - X_features: Feature matrix (N, feature_dim)
-        - y_los: LOS labels (N,)
-        - demographic_features: Optional demographic features (N, demo_dim) or None
-        - diagnosis_features: Optional diagnosis features (N, diag_dim) or None
+        Tuple of (X_features, y_los, demographic_features, diagnosis_features, y_mortality):
+        - y_mortality: Optional (N,) mortality labels 0/1 or -1 if not available; None if not in batch.
     """
     feature_config = config.get("features", {})
     use_demographics = feature_config.get("use_demographics", False)
@@ -47,6 +38,7 @@ def extract_features_from_dataloader(
     all_labels = []
     all_demographic_features = []
     all_diagnosis_features = []
+    all_mortality = []
     
     if feature_type == "handcrafted":
         # Extract hand-crafted features
@@ -86,6 +78,10 @@ def extract_features_from_dataloader(
                 if diag_features is not None:
                     diag_features = diag_features.numpy()[valid_mask]
                     all_diagnosis_features.append(diag_features)
+            
+            if "mortality_label" in batch:
+                mort = batch["mortality_label"].numpy()[valid_mask]
+                all_mortality.append(mort)
     
     elif feature_type == "dl_features":
         # Extract DL features using trained model
@@ -106,6 +102,8 @@ def extract_features_from_dataloader(
         )
         
         # Collect demographic and diagnosis features if available
+        all_demographic_features = None
+        all_diagnosis_features = None
         if use_demographics or use_diagnoses:
             demo_features_list = []
             diag_features_list = []
@@ -131,7 +129,7 @@ def extract_features_from_dataloader(
             if diag_features_list:
                 all_diagnosis_features = np.vstack(diag_features_list)
         
-        return X, y_los, all_demographic_features if all_demographic_features else None, all_diagnosis_features if all_diagnosis_features else None
+        return X, y_los, all_demographic_features if all_demographic_features else None, all_diagnosis_features if all_diagnosis_features else None, None
     
     else:
         raise ValueError(f"Unknown feature_type: {feature_type}. Must be 'handcrafted' or 'dl_features'")
@@ -149,7 +147,8 @@ def extract_features_from_dataloader(
     if all_diagnosis_features:
         diagnosis_features = np.vstack(all_diagnosis_features)
     
-    return X, y_los, demographic_features, diagnosis_features
+    y_mortality = np.concatenate(all_mortality) if all_mortality else None
+    return X, y_los, demographic_features, diagnosis_features, y_mortality
 
 
 def combine_features(
@@ -206,6 +205,8 @@ def main():
     print("="*60)
     print(f"Config: {config_path}")
     print(f"Feature type: {config.get('features', {}).get('feature_type', 'unknown')}")
+    print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
+    print(f"Multi-task (mortality): {config.get('multi_task', {}).get('enabled', False)}")
     print(f"Use demographics: {config.get('features', {}).get('use_demographics', False)}")
     print(f"Use diagnoses: {config.get('features', {}).get('use_diagnoses', False)}")
     print("="*60)
@@ -236,18 +237,34 @@ def main():
     
     print(f"\nExtracting {feature_type} features...")
     
-    # Extract features from train set
+    aug_enabled = config.get("data", {}).get("augmentation", {}).get("enabled", False)
+    aug_mult = config.get("augmentation_multiplier", 2) if aug_enabled else 1
+    
+    # Extract features from train set (optionally multiple augmented passes)
     print("Extracting train features...")
-    X_train, y_train, demo_train, diag_train = extract_features_from_dataloader(
+    X_train, y_train, demo_train, diag_train, y_mort_train = extract_features_from_dataloader(
         train_loader,
         feature_type=feature_type,
         config=config,
         device=device,
     )
+    for pass_i in range(1, aug_mult):
+        print(f"  Augmentation pass {pass_i + 1}/{aug_mult}...")
+        X_a, y_a, d_a, di_a, m_a = extract_features_from_dataloader(
+            train_loader, feature_type=feature_type, config=config, device=device,
+        )
+        X_train = np.vstack([X_train, X_a])
+        y_train = np.concatenate([y_train, y_a])
+        if demo_train is not None and d_a is not None:
+            demo_train = np.vstack([demo_train, d_a])
+        if diag_train is not None and di_a is not None:
+            diag_train = np.vstack([diag_train, di_a])
+        if y_mort_train is not None and m_a is not None:
+            y_mort_train = np.concatenate([y_mort_train, m_a])
     
     # Extract features from validation set
     print("Extracting validation features...")
-    X_val, y_val, demo_val, diag_val = extract_features_from_dataloader(
+    X_val, y_val, demo_val, diag_val, y_mort_val = extract_features_from_dataloader(
         val_loader,
         feature_type=feature_type,
         config=config,
@@ -267,8 +284,8 @@ def main():
     print("\nInitializing XGBoost model...")
     model = XGBoostECGModel(config, random_state=config.get("seed", 42))
     
-    # Train model
-    print("\nTraining XGBoost model...")
+    # Train LOS model
+    print("\nTraining XGBoost LOS model...")
     model.fit(
         X_train=X_train_combined,
         y_train=y_train,
@@ -276,6 +293,27 @@ def main():
         y_val=y_val,
         verbose=True,
     )
+    
+    # Train mortality classifier if multi-task and labels available
+    is_multi = config.get("multi_task", {}).get("enabled", False)
+    if is_multi and y_mort_train is not None:
+        valid_mort_train = (y_mort_train >= 0) & (y_mort_train <= 1)
+        if np.sum(valid_mort_train) > 0:
+            print("\nTraining XGBoost mortality model...")
+            X_val_mort = None
+            y_val_mort = None
+            if y_mort_val is not None:
+                valid_mort_val = (y_mort_val >= 0) & (y_mort_val <= 1)
+                if np.sum(valid_mort_val) > 0:
+                    X_val_mort = X_val_combined[valid_mort_val]
+                    y_val_mort = y_mort_val[valid_mort_val]
+            model.fit_mortality(
+                X_train_combined[valid_mort_train],
+                y_mort_train[valid_mort_train],
+                X_val=X_val_mort,
+                y_val_mortality=y_val_mort,
+                verbose=True,
+            )
     
     # Evaluate on validation set
     print("\nEvaluating on validation set...")
@@ -296,7 +334,7 @@ def main():
     # Evaluate on test set if available
     if test_loader is not None:
         print("\nExtracting test features...")
-        X_test, y_test, demo_test, diag_test = extract_features_from_dataloader(
+        X_test, y_test, demo_test, diag_test, y_mort_test = extract_features_from_dataloader(
             test_loader,
             feature_type=feature_type,
             config=config,
@@ -310,6 +348,21 @@ def main():
         print("\nEvaluating on test set...")
         test_metrics = model.evaluate(X_test_combined, y_test)
         
+        # Subgroup LOS ≤ 10 days (for parse_training_results compatibility)
+        mask_leq10 = y_test <= 10
+        n_leq10 = int(np.sum(mask_leq10))
+        if n_leq10 > 0:
+            mae_leq10 = np.mean(np.abs(model.predict(X_test_combined[mask_leq10]) - y_test[mask_leq10]))
+            rmse_leq10 = np.sqrt(np.mean((model.predict(X_test_combined[mask_leq10]) - y_test[mask_leq10]) ** 2))
+            r2_leq10 = float(np.corrcoef(model.predict(X_test_combined[mask_leq10]), y_test[mask_leq10])[0, 1] ** 2) if n_leq10 > 1 else 0.0
+            median_ae_leq10 = float(np.median(np.abs(model.predict(X_test_combined[mask_leq10]) - y_test[mask_leq10])))
+            print("\n" + "="*60)
+            print("Subgroup: LOS ≤ 10 days (N={} of {} stays):".format(n_leq10, len(y_test)))
+            print("  MAE:        {:.4f} days".format(mae_leq10))
+            print("  RMSE:       {:.4f} days".format(rmse_leq10))
+            print("  R²:         {:.4f}".format(r2_leq10))
+            print("  Median AE:  {:.4f} days".format(median_ae_leq10))
+        
         print("\n" + "="*60)
         print("Test Results")
         print("="*60)
@@ -321,6 +374,16 @@ def main():
         print(f"P25 Error: {test_metrics['p25_error']:.4f} days")
         print(f"P75 Error: {test_metrics['p75_error']:.4f} days")
         print(f"P90 Error: {test_metrics['p90_error']:.4f} days")
+        
+        # Mortality metrics if multi-task
+        if is_multi and y_mort_test is not None and model.mortality_model is not None:
+            mort_m = model.evaluate_mortality(X_test_combined, y_mort_test)
+            print("\nMortality (test):")
+            print(f"  Accuracy:  {mort_m['accuracy']:.4f}")
+            print(f"  Precision: {mort_m['precision']:.4f}")
+            print(f"  Recall:    {mort_m['recall']:.4f}")
+            print(f"  F1:        {mort_m['f1']:.4f}")
+            print(f"  AUC:       {mort_m['auc']:.4f}")
     else:
         test_metrics = None
         print("\nWarning: No test loader available. Skipping test evaluation.")

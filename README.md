@@ -4,6 +4,8 @@ Deep Learning models for predicting ICU Length of Stay (LOS) and mortality from 
 
 **Task Type**: LOS Regression (continuous prediction in days) + Mortality Classification (binary)
 
+**Supported Models**: CNN, LSTM, Hybrid CNN-LSTM, XResNet1D-PTBXL, DeepECG-SL, HuBERT-ECG, XGBoost (classical ML)
+
 ## Project Structure
 
 ```
@@ -19,40 +21,46 @@ MA-thesis-1/
 ## Directory Overview
 
 ### `configs/`
-- **`all_icu_ecgs/`** - Configs for full ICU ECG dataset
-- **`icu_24h/`** - Configs for 24-hour ICU ECG dataset
-  - `baseline_with_aug.yaml` - Baseline config with data augmentation (LOS regression)
-  - `baseline_no_aug.yaml` - Baseline config without augmentation (LOS regression)
-- **`model/`** - Model architecture configurations
-  - `efficientnet1d/` - EfficientNet1D-B1 configs
-  - `xresnet1d_101/` - FastAI xResNet1D-101 configs
-  - `resnet14/` - ResNet1D-14 configs
-  - `cnn_scratch.yaml` - CNN from scratch config
+- **`model/`** - Model architecture configurations (standalone configs with data, training, model params)
+  - `cnn_scratch.yaml` - CNN from scratch
   - `lstm/` - LSTM model configs
-    - `unidirectional/` - Unidirectional LSTM configs (improved: 2-layer, mean pooling, embedding)
-    - `bidirectional/` - Bidirectional LSTM configs (improved: 2-layer, mean pooling, embedding)
-  - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM configs
-  - `deepecg_sl/` - DeepECG-SL foundation model configs
-  - `hubert_ecg/` - HuBERT-ECG foundation model configs
+    - `unidirectional/` - Unidirectional LSTM (1-layer, 2-layer)
+    - `bidirectional/` - Bidirectional LSTM (1-layer, 2-layer)
+  - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM
+  - `xresnet1d_ptbxl/` - XResNet1D-101 with PTB-XL pretrained weights (transfer learning)
+  - `deepecg_sl/` - DeepECG-SL foundation model
+  - `hubert_ecg/` - HuBERT-ECG foundation model
+- **`classical_ml/`** - XGBoost configs (handcrafted and DL features)
+- **`all_icu_ecgs/`** - Configs for full ICU ECG dataset
+  - `weighted/` - Class weights for classification (balanced, sqrt)
 - **`features/`** - Feature configuration
-  - `demographic_features.yaml` - Demographic and diagnosis features configuration
+  - `demographic_features.yaml` - Age & Sex features
+  - `diagnosis_features.yaml` - ICD-10 diagnosis features
+  - `icu_unit_features.yaml` - ICU unit type (first_careunit) as one-hot
+- **`archive/`** - Legacy configs (baseline_with_aug, baseline_no_aug, etc.)
 
 ### `scripts/`
 - **`analysis/`** - Analysis and evaluation scripts
-  - `parse_training_results.py` - Parse regression metrics (MAE, RMSE, R²) from SLURM logs
+  - `parse_training_results.py` - Parse regression metrics from SLURM logs: `python scripts/analysis/parse_training_results.py --job <SLURM_JOB_ID>`
+  - `evaluate_subgroup.py` - Subgroup evaluation
+  - `analyze_job_performance.py` - SLURM job performance analysis
+  - `plot_architecture_params_accuracy.py`, `plot_architecture_params_mae.py` - Architecture comparison plots
+  - `plot_los_imbalance.py` - LOS distribution visualization
 - **`training/`** - Model training scripts
   - `icu_24h/` - Training scripts for 24h dataset
-    - `CNN_from_scratch/` - Baseline CNN training scripts
-    - `resnet-14/` - ResNet1D-14 training scripts
-    - `efficientnet1d/` - EfficientNet1D-B1 training scripts
-    - `xresnet1d_101/` - FastAI xResNet1D-101 training scripts
-    - `lstm/` - LSTM training scripts (unidirectional and bidirectional)
-    - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM training scripts
-    - `deepecg_sl/` - DeepECG-SL foundation model training (2-phase)
-    - `hubert_ecg/` - HuBERT-ECG foundation model training (2-phase)
+    - `CNN_from_scratch/` - Baseline CNN training
+    - `lstm/` - LSTM training (unidirectional and bidirectional)
+    - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM training
+    - `xresnet1d_ptbxl/` - XResNet1D-101 PTB-XL pretrained training
+    - `deepecg_sl/` - DeepECG-SL (2-phase training)
+    - `hubert_ecg/` - HuBERT-ECG (2-phase training)
+  - `classical_ml/` - XGBoost LOS regression (handcrafted or DL features)
   - `all_icu_ecgs/` - Training scripts for full dataset
 - **`cluster/`** - SLURM job scripts for cluster execution
-  - Mirrors the structure of `scripts/training/`
+  - `icu_24h/<model>/` - Mirrors training scripts (CNN_from_scratch, lstm, hybrid_cnn_lstm, xresnet1d_ptbxl, deepecg_sl, hubert_ecg)
+  - `classical_ml/` - XGBoost training
+  - `all_icu_ecgs/baseline_CNN/` - Full dataset CNN baseline
+  - `analysis/` - Bland-Altman and evaluation jobs
 - **`preprocessing/`** - Data preprocessing scripts
 - **`ecg_visualizing/`** - ECG visualization utilities
 - **`data/`** - Data management scripts
@@ -60,22 +68,22 @@ MA-thesis-1/
 - **`scoring_models/`** - Model scoring and evaluation
 
 ### `src/`
-- **`data/`** - Data loading and preprocessing modules
-  - `ecg/` - ECG dataset and dataloader implementations
+- **`data/`** - Data loading and preprocessing
+  - `ecg/` - ECG dataset, dataloader factory
+  - `labeling/` - ICU LOS labels, icustays mapping
+- **`features/`** - Feature extraction (handcrafted, DL-based for XGBoost)
 - **`models/`** - Model architectures
   - `core/` - Core components (BaseECGModel, MultiTaskECGModel)
   - `cnn_scratch/` - Baseline CNN from scratch
-  - `efficientnet1d/` - EfficientNet1D-B1 implementation
-  - `pretrained_CNN/` - Pretrained CNN models
-    - `resnet1d_14/` - ResNet1D-14
-    - `xresnet1d_101/` - FastAI xResNet1D-101
   - `lstm/` - LSTM models
     - `unidirectional/` - Unidirectional LSTM (LSTM1D_Unidirectional)
     - `bidirectional/` - Bidirectional LSTM (LSTM1D_Bidirectional)
   - `hybrid_cnn_lstm/` - Hybrid CNN-LSTM architecture
+  - `xresnet1d_ptbxl/` - XResNet1D-101 with PTB-XL pretrained weights (pure PyTorch)
   - `deepecg_sl/` - DeepECG-SL foundation model (WCR Transformer Encoder)
   - `hubert_ecg/` - HuBERT-ECG foundation model (HuBERT Transformer Encoder)
-- **`training/`** - Training loop and trainer classes
+  - `classical_ml/` - XGBoost model wrapper
+- **`training/`** - Training loop, trainer, losses
 - **`evaluation/`** - Evaluation metrics and utilities
 - **`utils/`** - Utility functions and helpers
 - **`visualization/`** - Visualization modules
@@ -92,7 +100,7 @@ MA-thesis-1/
 - **`icu_ecgs_24h/`** - 24-hour ICU ECG dataset
 - **`labeling/`** - ICU stay labels and metadata
 - **`mimic_iv_ecg_all/`** - Complete MIMIC-IV-ECG dataset
-- **`pretrained_weights/`** - Pretrained model weights (DeepECG-SL, HuBERT-ECG)
+- **`pretrained_weights/`** - Pretrained model weights (PTB-XL fastai_xresnet1d101.pth, DeepECG-SL, HuBERT-ECG)
 
 ### `outputs/` (not tracked in git)
 - **`checkpoints/`** - Model checkpoints
@@ -113,9 +121,11 @@ MA-thesis-1/
 ## Model Architectures
 
 ### CNN Models
-- **ResNet1D-14**: Shallow ResNet architecture with 14 layers (~1-2M parameters)
-- **EfficientNet1D-B1**: 1D adaptation of EfficientNet-B1 with MBConv blocks (~7.8M parameters)
-- **xResNet1D-101**: FastAI xResNet architecture with pretrained weights from PTB-XL dataset (~23M parameters)
+- **XResNet1D-PTBXL**: XResNet1D-101 with PTB-XL pretrained weights (ecg_ptbxl_benchmarking)
+  - Architecture: 1:1 from ecg_ptbxl_benchmarking, pretrained on PTB-XL 71 SCP classes
+  - Pure PyTorch implementation, loads FastAI checkpoint (`fastai_xresnet1d101.pth`)
+  - Parameters: ~23M
+  - Use case: Transfer learning from ECG classification pretraining
 - **CNNScratch**: Simple baseline CNN from scratch (~50-100K parameters)
 
 ### LSTM Models
@@ -162,7 +172,12 @@ MA-thesis-1/
   - Training: 2-phase (Phase 1: Frozen backbone, Phase 2: Fine-tuning)
   - Use case: Transfer learning from self-supervised pretraining
 
-All models support:
+### Classical ML
+- **XGBoost**: Gradient boosted trees for LOS regression
+  - Features: Handcrafted (RR intervals, spectral, morphological) or DL-extracted
+  - Configs: `configs/classical_ml/xgboost_handcrafted.yaml`, `xgboost_dl_features.yaml`
+
+All DL models support:
 - Multi-task learning (LOS regression + Mortality prediction)
 - LOS Regression: Continuous prediction in days (output dim = 1)
 - Mortality Classification: Binary prediction (0/1)
@@ -171,6 +186,20 @@ All models support:
   - Supports top 15 most frequent diagnoses (configurable)
   - Binary encoding per diagnosis
 - Loss functions: MSE/L1/Huber for LOS regression, BCE for mortality
+- Optional ICU unit features (first_careunit) via late fusion
+
+### Sample Weighting for Regression
+- **Imbalanced LOS**: Weight MSE loss by inverse bin frequency to emphasize rare LOS values
+- **Enable per model**: Add to model config under `training.loss`:
+  ```yaml
+  loss:
+    type: "mse"
+    weighted: true
+    method: "balanced"   # or "sqrt"
+  ```
+- **Methods**: `balanced` (inverse frequency) or `sqrt` (softer weighting)
+- **Binning**: Uses `data.los_binning` (strategy: `intervals` or `exact_days`, max_days: 9)
+- Weights computed at runtime from training LOS distribution; each model config is independent
 
 ## Evaluation Metrics
 
@@ -200,6 +229,12 @@ All models support:
   - Missing strategy: Zero-filling for missing diagnoses (configurable)
 - **Integration**: Late fusion with ECG features and demographic features
 
+### ICU Unit Features
+- **first_careunit**: ICU unit type at admission (from MIMIC-IV icustays)
+- **Top 10 Units**: One-hot encoding for most common units (MICU, MICU/SICU, CVICU, SICU, CCU, TSICU, Neuro Intermediate, Neuro SICU, Neuro Stepdown, Surgery/Vascular/Intermediate)
+- **Other**: Rare units encoded as zero vector; unknown/missing use `most_common` or `zero` strategy
+- **Integration**: Late fusion with ECG features; enabled via `data.icu_unit_features.enabled: true`
+
 ## Datasets
 
 - **`icu_24h`** - ECGs from first 24 hours of ICU stay
@@ -209,28 +244,47 @@ All models support:
 
 ## Data Splitting
 
-- **Stratified Split**: Quantile-based stratification on LOS values for train/val/test splits
-- **Patient-Level Split**: Ensures no data leakage (all ECGs from same patient in same split)
-- **Default Split**: 70% train, 15% validation, 15% test
+- **Temporal Stratified Split**: Time-ordered stratification on LOS for train/val/test
+- **Patient-Level Split**: All ECGs from same subject in same split (no data leakage)
+- **Default Split**: ~80% train, ~10% validation, ~10% test (subject counts vary by dataset)
 
 ## Training
 
+### Config Loading
+- Each model uses a **standalone config** in `configs/model/<model>/<config>.yaml`
+- No base/experiment config merge for icu_24h models; all params in model config
+
 ### Training Scripts
-- **CNN Models**: `scripts/training/icu_24h/CNN_from_scratch/`, `efficientnet1d/`, `xresnet1d_101/`
-- **LSTM Models**: `scripts/training/icu_24h/lstm/` (unidirectional and bidirectional)
+- **CNN Models**: `scripts/training/icu_24h/CNN_from_scratch/`, `xresnet1d_ptbxl/`
+- **LSTM Models**: `scripts/training/icu_24h/lstm/train_lstm_24h.py`, `train_lstm_bi_24h.py`
 - **Hybrid Models**: `scripts/training/icu_24h/hybrid_cnn_lstm/`
-- **Foundation Models**: 
-  - `scripts/training/icu_24h/deepecg_sl/` - DeepECG-SL with 2-phase training
-  - `scripts/training/icu_24h/hubert_ecg/` - HuBERT-ECG with 2-phase training
+- **Foundation Models**: `deepecg_sl/`, `hubert_ecg/` (2-phase training)
+- **Classical ML**: `scripts/training/classical_ml/train_xgboost_24h.py`
 
 ### Cluster Execution
-- SLURM job scripts in `scripts/cluster/icu_24h/` mirror training script structure
-- Submit with: `sbatch scripts/cluster/icu_24h/<model>/train_<model>_24h.sbatch`
+- SLURM job scripts in `scripts/cluster/icu_24h/<model>/`
+- Submit: `sbatch scripts/cluster/icu_24h/lstm/train_lstm_bi_24h.sbatch` or `sbatch scripts/cluster/icu_24h/xresnet1d_ptbxl/train_xresnet1d_ptbxl_24h.sbatch`
+- Logs: `outputs/logs/slurm_<job_id>.out`, `slurm_<job_id>.err`
 
 ## Requirements
 
 See `requirements.txt` for Python dependencies.
 
 ### Additional Dependencies for Foundation Models
-- **DeepECG-SL**: Requires `fairseq-signals` (install with: `pip install git+https://github.com/HeartWise-AI/fairseq-signals.git`)
-- **HuBERT-ECG**: Requires pretrained weights in `data/pretrained_weights/Hubert_ECG/base/`
+- **DeepECG-SL**: `fairseq-signals` (`pip install git+https://github.com/HeartWise-AI/fairseq-signals.git`)
+- **HuBERT-ECG**: Pretrained weights in `data/pretrained_weights/Hubert_ECG/base/`
+
+## Quick Start
+
+```bash
+# Local training (example: LSTM Bidirectional or XResNet1D-PTBXL)
+python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py
+python scripts/training/icu_24h/xresnet1d_ptbxl/train_xresnet1d_ptbxl_24h.py
+
+# Cluster (SLURM)
+sbatch scripts/cluster/icu_24h/lstm/train_lstm_bi_24h.sbatch
+sbatch scripts/cluster/icu_24h/xresnet1d_ptbxl/train_xresnet1d_ptbxl_24h.sbatch
+
+# Parse results from SLURM log
+python scripts/analysis/parse_training_results.py --job <SLURM_JOB_ID>
+```

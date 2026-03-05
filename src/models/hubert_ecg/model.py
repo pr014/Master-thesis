@@ -185,6 +185,7 @@ class HuBERT_ECG(BaseECGModel):
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads (for MultiTaskECGModel compatibility).
         
@@ -192,6 +193,7 @@ class HuBERT_ECG(BaseECGModel):
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features
             diagnosis_features: Optional diagnosis features
+            icu_unit_features: Optional ICU unit features (accepted for API compatibility, not used)
             
         Returns:
             Features tensor of shape (B, fused_feature_dim)

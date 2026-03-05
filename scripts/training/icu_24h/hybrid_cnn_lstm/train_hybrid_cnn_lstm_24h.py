@@ -1,9 +1,14 @@
 """Training script for Hybrid CNN-LSTM with LOS regression.
 
 LOS Regression Task: Predicts continuous LOS in days (not binned classes).
+
+Usage:
+  python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py
+  python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py --resume outputs/checkpoints/HybridCNNLSTM_best_3353650.pt
 """
 
 from pathlib import Path
+import argparse
 import sys
 import os
 import torch
@@ -24,6 +29,17 @@ def main():
     
     LOS Regression Task: Predicts continuous LOS in days.
     """
+    parser = argparse.ArgumentParser(description="Train Hybrid CNN-LSTM for LOS regression")
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint to resume training from (e.g. outputs/checkpoints/HybridCNNLSTM_best_3353650.pt)",
+    )
+    args = parser.parse_args()
+    resume_path = args.resume or os.getenv("RESUME_PATH")
+    resume_from = Path(resume_path) if resume_path else None
+
     # Load config (standalone model config with all parameters)
     model_config_path = Path("configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml")
     
@@ -121,9 +137,12 @@ def main():
     trainer.job_id = os.getenv("SLURM_JOB_ID")
     if trainer.job_id:
         print(f"SLURM Job ID: {trainer.job_id}")
-    
+
+    if resume_from is not None:
+        print(f"Resuming from checkpoint: {resume_from}")
+
     # Train
-    history = trainer.train()
+    history = trainer.train(resume_from=resume_from)
     
     print("Training completed!")
     print(f"Best validation loss: {min(history.get('val_loss', [float('inf')])):.4f}")

@@ -8,6 +8,11 @@ from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
 )
 
 
@@ -52,6 +57,7 @@ class XGBoostECGModel:
         )
         
         self.config = config
+        self.mortality_model = None  # Optional XGBClassifier, set when multi_task.enabled
     
     def fit(
         self,
@@ -155,6 +161,65 @@ class XGBoostECGModel:
             "p90_error": float(p90_error),
         }
     
+    def fit_mortality(
+        self,
+        X_train: np.ndarray,
+        y_mortality: np.ndarray,
+        X_val: Optional[np.ndarray] = None,
+        y_val_mortality: Optional[np.ndarray] = None,
+        scale_pos_weight: Optional[float] = None,
+        verbose: bool = True,
+    ) -> "XGBoostECGModel":
+        """Train mortality classifier (binary). Call after fit() if multi_task enabled."""
+        cfg = self.config.get("xgboost_mortality", self.config.get("xgboost", {}))
+        scale = scale_pos_weight
+        if scale is None and cfg.get("scale_pos_weight") == "auto" and y_mortality is not None:
+            n_pos = int(np.sum(y_mortality == 1))
+            n_neg = int(np.sum(y_mortality == 0))
+            scale = n_neg / max(n_pos, 1) if n_pos > 0 else 1.0
+        self.mortality_model = xgb.XGBClassifier(
+            n_estimators=cfg.get("n_estimators", 100),
+            max_depth=cfg.get("max_depth", 4),
+            learning_rate=cfg.get("learning_rate", 0.1),
+            subsample=cfg.get("subsample", 0.8),
+            colsample_bytree=cfg.get("colsample_bytree", 0.8),
+            random_state=self.config.get("seed", 42),
+            n_jobs=cfg.get("n_jobs", -1),
+            tree_method=cfg.get("tree_method", "hist"),
+            verbosity=cfg.get("verbosity", 1),
+            early_stopping_rounds=cfg.get("early_stopping_rounds", 10),
+            scale_pos_weight=scale,
+        )
+        eval_set = None
+        if X_val is not None and y_val_mortality is not None:
+            eval_set = [(X_train, y_mortality), (X_val, y_val_mortality)]
+        self.mortality_model.fit(X_train, y_mortality, eval_set=eval_set, verbose=verbose)
+        return self
+
+    def predict_mortality_proba(self, X: np.ndarray) -> np.ndarray:
+        """Predict mortality probabilities. Returns (N,) proba of class 1."""
+        if self.mortality_model is None:
+            raise RuntimeError("Mortality model not fitted. Enable multi_task and call fit_mortality.")
+        return self.mortality_model.predict_proba(X)[:, 1]
+
+    def evaluate_mortality(self, X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+        """Evaluate mortality classifier. y: 0/1 labels. Filters out invalid (e.g. -1)."""
+        valid = (y >= 0) & (y <= 1)
+        if not np.any(valid):
+            return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0, "auc": 0.0}
+        X_v, y_v = X[valid], y[valid].astype(int)
+        proba = self.predict_mortality_proba(X_v)
+        pred = (proba >= 0.5).astype(int)
+        acc = accuracy_score(y_v, pred)
+        prec = precision_score(y_v, pred, zero_division=0)
+        rec = recall_score(y_v, pred, zero_division=0)
+        f1 = f1_score(y_v, pred, zero_division=0)
+        try:
+            auc = roc_auc_score(y_v, proba) if len(np.unique(y_v)) > 1 else 0.0
+        except Exception:
+            auc = 0.0
+        return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1, "auc": auc}
+
     def get_feature_importance(self) -> np.ndarray:
         """
         Get feature importance scores.
@@ -177,10 +242,12 @@ class XGBoostECGModel:
         if filepath.suffix == ".json":
             self.model.save_model(str(filepath))
         else:
-            # Default: use pickle
             import pickle
+            payload = {"los_model": self.model}
+            if self.mortality_model is not None:
+                payload["mortality_model"] = self.mortality_model
             with open(filepath, "wb") as f:
-                pickle.dump(self.model, f)
+                pickle.dump(payload, f)
     
     def load_model(self, filepath: str) -> "XGBoostECGModel":
         """
@@ -197,10 +264,15 @@ class XGBoostECGModel:
         if filepath.suffix == ".json":
             self.model.load_model(str(filepath))
         else:
-            # Default: use pickle
             import pickle
             with open(filepath, "rb") as f:
-                self.model = pickle.load(f)
+                data = pickle.load(f)
+            if isinstance(data, dict):
+                self.model = data["los_model"]
+                self.mortality_model = data.get("mortality_model")
+            else:
+                self.model = data  # legacy: only LOS model
+                self.mortality_model = None
         
         return self
 

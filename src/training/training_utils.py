@@ -184,6 +184,15 @@ def evaluate_and_print_results(
     print(f"   75th percentile:       {los_p75_error:.4f} days")
     print(f"   90th percentile:       {los_p90_error:.4f} days")
 
+    # Subgroup: LOS <= 10 days
+    n_leq10 = test_metrics.get("los_n_leq10", 0)
+    if n_leq10 > 0:
+        print(f"\n🔹 Subgroup: LOS ≤ 10 days (N={n_leq10:,} of {test_metrics.get('num_stays', 0):,} stays):")
+        print(f"   MAE:        {test_metrics.get('los_mae_leq10', 0.0):.4f} days")
+        print(f"   RMSE:       {test_metrics.get('los_rmse_leq10', 0.0):.4f} days")
+        print(f"   R²:         {test_metrics.get('los_r2_leq10', 0.0):.4f}")
+        print(f"   Median AE:  {test_metrics.get('los_median_ae_leq10', 0.0):.4f} days")
+
     # Mortality summary (multi-task)
     if "mortality_auc" in test_metrics:
         print("\n🔹 Mortality (Binary Classification):")
@@ -214,6 +223,11 @@ def evaluate_and_print_results(
     history["test_los_p75_error"] = los_p75_error
     history["test_los_p90_error"] = los_p90_error
     history["test_num_stays"] = test_metrics.get("num_stays", 0)
+    history["test_los_mae_leq10"] = test_metrics.get("los_mae_leq10", None)
+    history["test_los_rmse_leq10"] = test_metrics.get("los_rmse_leq10", None)
+    history["test_los_r2_leq10"] = test_metrics.get("los_r2_leq10", None)
+    history["test_los_median_ae_leq10"] = test_metrics.get("los_median_ae_leq10", None)
+    history["test_los_n_leq10"] = test_metrics.get("los_n_leq10", None)
 
     if "mortality_auc" in test_metrics:
         history["test_mortality_auc"] = test_metrics.get("mortality_auc", 0.0)

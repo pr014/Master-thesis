@@ -290,6 +290,36 @@ def _parse_key_metrics(block: str) -> Tuple[Dict[str, float], Optional[int]]:
     return metrics, num_stays
 
 
+def _extract_subgroup_leq10(text: str) -> Optional[Dict[str, float]]:
+    """Extract LOS ≤10 days subgroup metrics from the log.
+
+    Looks for the block printed by training_utils.py:
+        🔹 Subgroup: LOS ≤ 10 days (N=XXX of YYY stays):
+           MAE:        X.XXXX days
+           RMSE:       X.XXXX days
+           R²:         X.XXXX
+           Median AE:  X.XXXX days
+    """
+    m = re.search(
+        r"Subgroup:\s*LOS\s*[≤<]=?\s*10\s*days?\s*\(N=(\d+)[^)]*\).*?"
+        r"MAE:\s*(%s)\s*days?.*?"
+        r"RMSE:\s*(%s)\s*days?.*?"
+        r"R²:\s*(%s).*?"
+        r"Median AE:\s*(%s)\s*days?" % (_RE_FLOAT, _RE_FLOAT, _RE_FLOAT, _RE_FLOAT),
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    return {
+        "test_los_n_leq10": int(m.group(1)),
+        "test_los_mae_leq10": float(m.group(2)),
+        "test_los_rmse_leq10": float(m.group(3)),
+        "test_los_r2_leq10": float(m.group(4)),
+        "test_los_median_ae_leq10": float(m.group(5)),
+    }
+
+
 def _extract_validation_block(text: str) -> Optional[str]:
     """
     Extract the block that contains validation metrics.
@@ -320,7 +350,12 @@ def parse_log_text(text: str) -> ParsedResults:
 
     if test_block:
         test_metrics, num_stays = _parse_key_metrics(test_block)
-    
+
+    # Extract subgroup metrics (LOS <= 10 days) if present
+    subgroup = _extract_subgroup_leq10(text)
+    if subgroup:
+        test_metrics.update(subgroup)
+
     # Extract validation metrics from XGBoost format if available
     val_block = _extract_validation_block(text)
     val_metrics: Dict[str, float] = {}
@@ -389,16 +424,20 @@ def main() -> None:
     
     # Print test metrics first (needed for overfitting analysis)
     if parsed.test_metrics:
+        # Separate subgroup keys from overall keys
+        subgroup_keys = {k for k in parsed.test_metrics if k.endswith("_leq10")}
+        overall_metrics = {k: v for k, v in parsed.test_metrics.items() if k not in subgroup_keys}
+
         print("\n🔹 Test Metrics (LOS Regression):")
         # Print LOS metrics first, then mortality metrics (preserve logical order)
-        los_metric_keys = [k for k in parsed.test_metrics.keys() if k.startswith('los_') or k.startswith('test_los_')]
-        mortality_metric_keys = [k for k in parsed.test_metrics.keys() if k.startswith('mortality_')]
-        other_metric_keys = [k for k in parsed.test_metrics.keys() if k not in los_metric_keys and k not in mortality_metric_keys]
-        
+        los_metric_keys = [k for k in overall_metrics if k.startswith('los_') or k.startswith('test_los_')]
+        mortality_metric_keys = [k for k in overall_metrics if k.startswith('mortality_')]
+        other_metric_keys = [k for k in overall_metrics if k not in los_metric_keys and k not in mortality_metric_keys]
+
         # Print in order: LOS metrics, then mortality, then others
         for key_list in [los_metric_keys, mortality_metric_keys, other_metric_keys]:
             for k in sorted(key_list):
-                value = parsed.test_metrics[k]
+                value = overall_metrics[k]
                 # Add unit for MAE/RMSE/Median AE/Percentile errors
                 if any(x in k for x in ['mae', 'rmse', 'median_ae', 'p25', 'p50', 'p75', 'p90']):
                     print(f"  {k}: {value:.4f} days")
@@ -407,8 +446,28 @@ def main() -> None:
                 else:
                     print(f"  {k}: {value:.4f}")
         print(f"num_stays_evaluated: {parsed.num_stays_evaluated}")
+
+        # Subgroup block: LOS <= 10 days
+        if subgroup_keys:
+            n_leq10 = int(parsed.test_metrics.get("test_los_n_leq10", 0))
+            total = parsed.num_stays_evaluated or "?"
+            print(f"\n🔹 Subgroup: LOS ≤ 10 days (N={n_leq10:,} of {total} stays):")
+            subgroup_display = [
+                ("test_los_mae_leq10",       "MAE"),
+                ("test_los_rmse_leq10",      "RMSE"),
+                ("test_los_r2_leq10",        "R²"),
+                ("test_los_median_ae_leq10", "Median AE"),
+            ]
+            for key, label in subgroup_display:
+                if key in parsed.test_metrics:
+                    v = parsed.test_metrics[key]
+                    if label in ("MAE", "RMSE", "Median AE"):
+                        print(f"  {label}: {v:.4f} days")
+                    else:
+                        print(f"  {label}: {v:.4f}")
     else:
         print("\n🔹 Test Metrics: <not found in log>")
+
     
     # Overfitting Analysis Section
     print("\n" + "="*80)

@@ -41,7 +41,7 @@ data:
     filter_order: 4
     normalize: "zscore"
   
-  # Data augmentation
+  # Data augmentation (all 4 methods for maximal augmentation)
   augmentation:
     enabled: true
     gaussian_noise: true
@@ -49,6 +49,13 @@ data:
     amplitude_scaling: true
     scale_min: 0.85
     scale_max: 1.15
+    baseline_wander: true
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08
+    lead_dropout: true
+    lead_dropout_prob: 0.1
   
   # Demographic features - DISABLED
   demographic_features:
@@ -59,7 +66,8 @@ data:
   diagnosis_features:
     enabled: false
   
-  # ICU Unit Features ENABLED
+  # ICU Unit Features - first_careunit from MIMIC-IV icustays (late fusion)
+  # Units: canonical MIMIC-IV ICU types; one-hot encoding for LOS context
   icu_unit_features:
     enabled: true
     encoding: "onehot"
@@ -139,7 +147,9 @@ training:
     min_lr: 1e-6
   
   loss:
-    type: "mse"
+    type: "huber"
+    delta: 1.0
+    weighted: false
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS

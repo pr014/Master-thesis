@@ -55,8 +55,8 @@ data:
 
 features:
   feature_type: "dl_features"  # "handcrafted" or "dl_features"
-  dl_model_checkpoint: "outputs/checkpoints/ResNet1D14_best_3023299.pt"  # Path to trained DL model checkpoint
-  dl_model_type: "ResNet1D14"  # Model type: "CNNScratch", "ResNet1D14", "EfficientNet1D_B1", "XResNet1D101", "LSTM1D", "LSTM1D_Bidirectional", "HybridCNNLSTM"
+  dl_model_checkpoint: "outputs/checkpoints/CNNScratch_best_3400485.pt"  # Path to trained DL model checkpoint
+  dl_model_type: "CNNScratch"  # Model type: "CNNScratch", "LSTM1D", "LSTM1D_Bidirectional", "HybridCNNLSTM"
   use_demographics: false  # Include demographic features (Age, Sex)
   use_diagnoses: false  # Include diagnosis features (Top 15 ICD-10 codes)
 
@@ -65,7 +65,7 @@ features:
 # =============================================================================
 
 model:
-  type: "ResNet1D14"  # Must match dl_model_type above
+  type: "CNNScratch"  # Must match dl_model_type above
   num_classes: 10  # Not used for regression, but required for model loading
 
 # =============================================================================

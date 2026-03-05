@@ -2,7 +2,7 @@
 #SBATCH --job-name=hybrid_cnn_lstm_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=03:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=05:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -124,10 +124,10 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 
 echo "============================================================"
-echo "Training Hybrid CNN-LSTM with SQRT Class Weights for 24h Dataset"
+echo "Training Hybrid CNN-LSTM for 24h Dataset"
 echo "============================================================"
 
-# Training starten
+# Training starten (Full augmentation: Gaussian + Amplitude + BaselineWander + LeadDropout)
 python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py
 
 TRAINING_EXIT_CODE=$?

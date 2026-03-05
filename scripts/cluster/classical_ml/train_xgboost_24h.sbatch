@@ -91,6 +91,14 @@ if [ -f "$LOG_FILE" ]; then
     grep -A 10 "Test Results" "$LOG_FILE" || echo "Keine Test-Ergebnisse gefunden"
     
     echo ""
+    echo "=== Subgroup LOS ≤ 10 days ==="
+    grep -A 5 "Subgroup: LOS" "$LOG_FILE" || echo "Keine Subgroup-Ergebnisse gefunden"
+    
+    echo ""
+    echo "=== Mortality (test) ==="
+    grep -A 6 "Mortality (test):" "$LOG_FILE" || echo "Keine Mortalitäts-Metriken gefunden"
+    
+    echo ""
     echo "=== Feature Extraction Info ==="
     grep -E "Extracting|features shape|samples:" "$LOG_FILE" | tail -10 || echo "Keine Feature-Info gefunden"
     
