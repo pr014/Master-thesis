@@ -203,10 +203,10 @@ class HuBERT_ECG_Trainer(Trainer):
 
 
 def main():
-    """Main training function for HuBERT-ECG with Phase 1 only (frozen backbone / head-only).
+    """Main training function for HuBERT-ECG with two-phase training.
     
     Phase 1: Frozen backbone, only task heads trained.
-    Phase 2: Fine-tuning (skipped in this baseline run, H1).
+    Phase 2: Fine-tuning with unfrozen backbone (layer-dependent LRs).
     
     LOS Regression Task: Predicts continuous LOS in days.
     """
@@ -215,7 +215,7 @@ def main():
     config = load_config(model_config_path=model_config_path)
     
     print("="*60)
-    print("Training HuBERT-ECG - Phase 1 Only (Frozen Backbone / Head-Only)")
+    print("Training HuBERT-ECG - Phase 1 + Phase 2 (Frozen → Unfrozen)")
     print("Task: LOS REGRESSION (continuous prediction in days)")
     print("="*60)
     print(f"Model config: {model_config_path}")
@@ -319,17 +319,60 @@ def main():
     torch.save(save_dict, phase1_checkpoint_path)
     print(f"Saved Phase 1 checkpoint to: {phase1_checkpoint_path}")
     
-    # ========== FINAL EVALUATION ==========
+    # ========== PHASE 2: Unfrozen Backbone (Fine-tuning) ==========
     print("\n" + "="*60)
-    print("FINAL EVALUATION ON TEST SET")
+    print("PHASE 2: UNFROZEN BACKBONE - FINE-TUNING")
     print("="*60)
     
-    # Load best Phase 1 model
-    if phase1_checkpoint_path.exists():
-        checkpoint = torch.load(phase1_checkpoint_path, map_location=trainer_phase1.device)
+    trainer_phase2 = HuBERT_ECG_Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        config=config,
+        criterion=criterion,
+        phase=2,
+    )
+    trainer_phase2.config_paths = {"model": str(model_config_path.resolve())}
+    trainer_phase2.job_id = job_id
+    
+    # Phase 2: max 20 epochs, patience 7
+    history_phase2 = trainer_phase2.train_phase2(
+        phase1_checkpoint_path=phase1_checkpoint_path,
+        max_epochs=20,
+        patience=config.get("early_stopping", {}).get("patience", 7),
+    )
+    
+    print("\nPhase 2 completed!")
+    print(f"Best validation loss: {min(history_phase2.get('val_loss', [float('inf')])):.4f}")
+    print(f"Best validation MAE:  {min(history_phase2.get('val_los_mae', [float('inf')])):.4f} days")
+    
+    # Save Phase 2 checkpoint
+    phase2_checkpoint_path = checkpoint_dir / f"hubert_ecg_phase2_best_{job_id if job_id else 'local'}.pt"
+    save_dict_phase2 = {
+        'model_state_dict': (
+            trainer_phase2.checkpoint.best_model_state
+            if hasattr(trainer_phase2.checkpoint, 'best_model_state')
+            else model.state_dict()
+        ),
+        'epoch': getattr(trainer_phase2.checkpoint, 'best_epoch', trainer_phase2.current_epoch),
+        'val_loss': getattr(trainer_phase2.checkpoint, 'best_score', None),
+        'history': history_phase2,
+        'config': config,
+    }
+    torch.save(save_dict_phase2, phase2_checkpoint_path)
+    print(f"Saved Phase 2 checkpoint to: {phase2_checkpoint_path}")
+    
+    # ========== FINAL EVALUATION (Phase 2 model) ==========
+    print("\n" + "="*60)
+    print("FINAL EVALUATION ON TEST SET (Phase 2 model)")
+    print("="*60)
+    
+    # Load best Phase 2 model for evaluation
+    if phase2_checkpoint_path.exists():
+        checkpoint = torch.load(phase2_checkpoint_path, map_location=trainer_phase2.device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.to(trainer_phase1.device)
-        print(f"Loaded best Phase 1 model from epoch {checkpoint.get('epoch', 'unknown')}")
+        model.to(trainer_phase2.device)
+        print(f"Loaded best Phase 2 model from epoch {checkpoint.get('epoch', 'unknown')}")
     
     eval_trainer = Trainer(
         model=model,
@@ -340,14 +383,20 @@ def main():
     )
     eval_trainer.job_id = job_id
     
-    history_final = evaluate_and_print_results(eval_trainer, test_loader, history_phase1, config)
+    # Merge Phase 1 + Phase 2 history for logging (use Phase 2 for final metrics)
+    history_combined = {
+        k: history_phase1.get(k, []) + history_phase2.get(k, [])
+        for k in set(history_phase1) | set(history_phase2)
+    }
+    history_final = evaluate_and_print_results(eval_trainer, test_loader, history_combined, config)
     
     print("\n" + "="*60)
-    print("PHASE 1 (HEAD-ONLY) TRAINING COMPLETED")
+    print("PHASE 1 + PHASE 2 TRAINING COMPLETED")
     print("="*60)
-    print(f"Checkpoint: {phase1_checkpoint_path}")
+    print(f"Phase 1 checkpoint: {phase1_checkpoint_path}")
+    print(f"Phase 2 checkpoint: {phase2_checkpoint_path}")
     
-    return history_phase1
+    return history_phase2
 
 
 if __name__ == "__main__":

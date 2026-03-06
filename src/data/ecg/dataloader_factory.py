@@ -5,7 +5,7 @@ from typing import Dict, Any, Tuple, Optional, List
 import torch
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 
 from .ecg_dataset import ECGDataset, build_demo_index, extract_subject_id_from_path, construct_ecg_time
@@ -109,14 +109,20 @@ def compute_regression_weights(
     los_binning = data_config.get("los_binning", {})
     strategy = los_binning.get("strategy", "intervals")
     max_days = los_binning.get("max_days", 9)
-    
+    boundaries = los_binning.get("boundaries")
+
     loss_config = config.get("training", {}).get("loss", {})
     method = loss_config.get("method", "balanced")
-    
-    bins = [
-        los_to_bin(los, binning_strategy=strategy, max_days=max_days)
-        for los in los_values
-    ]
+
+    def _to_bin(los: float) -> int:
+        return los_to_bin(
+            los,
+            binning_strategy=strategy,
+            max_days=max_days,
+            boundaries=boundaries,
+        )
+
+    bins = [_to_bin(los) for los in los_values]
     n_bins = max(bins) + 1
     counts = [bins.count(i) for i in range(n_bins)]
     n_total = sum(counts)
@@ -141,6 +147,93 @@ def compute_regression_weights(
     weights_normalized = [w / mean_weight if w > 0 else 0.0 for w in weights]
     
     return {i: weights_normalized[i] for i in range(len(weights_normalized))}
+
+
+def compute_oversample_weights(
+    records: List[Dict[str, Any]],
+    icu_mapper: Any,
+    config: Dict[str, Any],
+    timestamp_mapping: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+    data_dir: Optional[str] = None,
+) -> Optional[List[float]]:
+    """Compute per-sample weights for oversampling rare LOS bins.
+
+    Returns a list of weights (one per record). Rare bins get higher weight so
+    WeightedRandomSampler draws them more often. Unmatched records get weight 1.0.
+
+    Args:
+        records: List of record dicts with 'base_path' key.
+        icu_mapper: ICUStayMapper instance.
+        config: Full config with data.oversample_minority and data.los_binning.
+        timestamp_mapping: Optional timestamp mapping.
+        data_dir: Data directory.
+
+    Returns:
+        List of weights, or None if oversample_minority not enabled.
+    """
+    oversample_config = config.get("data", {}).get("oversample_minority", {})
+    if not oversample_config.get("enabled", False):
+        return None
+
+    los_binning = config.get("data", {}).get("los_binning", {})
+    strategy = los_binning.get("strategy", "clinical_6bin")
+    max_days = los_binning.get("max_days", 9)
+    boundaries = los_binning.get("boundaries")
+    rare_bins = set(oversample_config.get("rare_bins", [4, 5]))
+    weight = float(oversample_config.get("weight", 3.0))
+
+    data_dir_path = Path(data_dir) if data_dir else None
+    weights_list = []
+
+    for record in records:
+        base_path = record.get("base_path", "")
+        los_days = None
+        if base_path:
+            try:
+                subject_id = extract_subject_id_from_path(base_path)
+            except ValueError:
+                subject_id = None
+            if subject_id is not None:
+                ecg_time = None
+                if timestamp_mapping and data_dir_path:
+                    try:
+                        base_path_obj = Path(base_path)
+                        rel_path = (
+                            base_path_obj.relative_to(data_dir_path)
+                            if base_path_obj.is_absolute()
+                            else Path(base_path)
+                        )
+                        rel_path_str = str(rel_path).replace("\\", "/")
+                        if rel_path_str in timestamp_mapping:
+                            ts_info = timestamp_mapping[rel_path_str]
+                            ecg_time = construct_ecg_time(
+                                ts_info.get("base_date"), ts_info.get("base_time")
+                            )
+                    except (ValueError, KeyError):
+                        pass
+                if ecg_time is None and icu_mapper is not None:
+                    subject_stays = icu_mapper.icustays_df[
+                        icu_mapper.icustays_df["subject_id"] == subject_id
+                    ]
+                    if len(subject_stays) > 0:
+                        ecg_time = pd.to_datetime(subject_stays.iloc[0]["intime"])
+                if ecg_time is not None:
+                    stay_id = icu_mapper.map_ecg_to_stay(subject_id, ecg_time)
+                    if stay_id is not None:
+                        los_days = icu_mapper.get_los(stay_id)
+
+        if los_days is None:
+            weights_list.append(1.0)
+        else:
+            bin_idx = los_to_bin(
+                float(los_days),
+                binning_strategy=strategy,
+                max_days=max_days,
+                boundaries=boundaries,
+            )
+            weights_list.append(weight if bin_idx in rare_bins else 1.0)
+
+    return weights_list
 
 
 def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -736,11 +829,32 @@ def create_dataloaders(
         los_binning=None,
     )
     
+    # Oversampling: WeightedRandomSampler for rare LOS bins (when enabled)
+    sampler = None
+    oversample_weights = compute_oversample_weights(
+        train_records,
+        icu_mapper,
+        config,
+        timestamp_mapping=timestamp_mapping,
+        data_dir=data_dir,
+    )
+    if oversample_weights is not None:
+        # WeightedRandomSampler needs weights as tensor, num_samples = len(dataset)
+        weights_tensor = torch.tensor(oversample_weights, dtype=torch.float32)
+        sampler = WeightedRandomSampler(
+            weights=weights_tensor,
+            num_samples=len(train_dataset),
+            replacement=True,
+        )
+        n_rare = sum(1 for w in oversample_weights if w > 1.0)
+        print(f"Oversampling: enabled (rare bins weighted, {n_rare:,} samples in rare bins)")
+
     # Create DataLoaders with custom collate function
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=custom_collate_fn,

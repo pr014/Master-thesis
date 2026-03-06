@@ -161,6 +161,7 @@ def main() -> None:
     parser.add_argument("--logs-dir", type=str, default="outputs/logs")
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--leq10", action="store_true", help="Use MAE for LOS ≤ 10 days subgroup")
+    parser.add_argument("--exclude", type=str, default=None, help="Comma-separated architectures to exclude (e.g. HuBERT-ECG)")
     args = parser.parse_args()
 
     logs_dir = Path(args.logs_dir)
@@ -171,8 +172,12 @@ def main() -> None:
     best_mae = get_best_mae_per_architecture(logs_dir, subgroup_leq10=args.leq10)
     params = get_parameter_counts()
 
-    # Build plot data: only architectures with MAE
-    names = [a for a in MODEL_ORDER if a in best_mae and a in params]
+    exclude = set()
+    if args.exclude:
+        exclude = {s.strip() for s in args.exclude.split(",") if s.strip()}
+
+    # Build plot data: only architectures with MAE (and not excluded)
+    names = [a for a in MODEL_ORDER if a in best_mae and a in params and a not in exclude]
     if not names:
         metric = "MAE (LOS ≤ 10 days)" if args.leq10 else "MAE"
         print(f"No architectures with {metric} found in logs. Check --logs-dir.")

@@ -52,7 +52,7 @@ data:
     lead_dropout_prob: 0.1
   
   demographic_features:
-    enabled: false
+    enabled: true
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
   
   diagnosis_features:

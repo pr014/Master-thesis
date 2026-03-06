@@ -162,6 +162,7 @@ class ECGDataset(Dataset):
         los_binning = los_binning or {}
         self._binning_strategy = los_binning.get("strategy", "intervals")
         self._binning_max_days = los_binning.get("max_days", 9)
+        self._binning_boundaries = los_binning.get("boundaries")
         
         # Statistics
         self.matched_count = 0
@@ -1011,6 +1012,7 @@ class ECGDataset(Dataset):
                 float(label),
                 binning_strategy=self._binning_strategy,
                 max_days=self._binning_max_days,
+                boundaries=self._binning_boundaries,
             )
             sample_weight = self.regression_weights.get(bin_idx, 1.0)
             result["sample_weight"] = torch.tensor(sample_weight, dtype=torch.float32)

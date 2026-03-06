@@ -57,9 +57,9 @@ data:
     lead_dropout: true
     lead_dropout_prob: 0.1
   
-  # Demographic features - DISABLED
+  # Demographic features - ENABLED (Age & Sex for late fusion)
   demographic_features:
-    enabled: false
+    enabled: true
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
   
   # Diagnosis features - DISABLED

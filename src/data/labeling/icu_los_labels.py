@@ -176,24 +176,49 @@ class ICUStayMapper:
         return self._mortality_mapping.get(stay_id)
 
 
-def los_to_bin(los_days: float, binning_strategy: str = "intervals", max_days: int = 9) -> int:
+# Clinically interpretable 6-bin boundaries (data-driven from 24h ICU ECG dataset)
+# Bins: <24h | 1 day | 2-3 days (short) | 4-6 days (medium) | 1-2 weeks | 2+ weeks
+CLINICAL_6BIN_BOUNDARIES = [0, 1, 2, 4, 7, 14, float("inf")]
+
+
+def los_to_bin(
+    los_days: float,
+    binning_strategy: str = "intervals",
+    max_days: int = 9,
+    boundaries: Optional[List[float]] = None,
+) -> int:
     """Convert LOS (days) to bin class.
     
-    Supports two binning strategies:
+    Supports binning strategies:
     1. "intervals": [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf) => max_days+1 classes
-    2. "exact_days": 1 day [0,1), 2 days [1,2), ..., max_days days [max_days-1, max_days), >= max_days+1 [max_days, +inf) => max_days+1 classes
+    2. "exact_days": 1 day [0,1), 2 days [1,2), ..., max_days days [max_days-1, max_days), >= max_days+1 [max_days, +inf)
+    3. "clinical_6bin": [0,1), [1,2), [2,4), [4,7), [7,14), [14,+inf) => 6 classes (clinically interpretable)
+    4. "custom": uses boundaries list [b0, b1, ..., bn] for bins [b0,b1), [b1,b2), ..., [b_{n-1}, +inf)
     
     Args:
         los_days: Length of stay in days (float).
-        binning_strategy: "intervals" or "exact_days" (default: "intervals")
-        max_days: For "intervals": upper bound of last day bin (default 9). For "exact_days": max day classes.
+        binning_strategy: "intervals", "exact_days", "clinical_6bin", or "custom"
+        max_days: For "intervals"/"exact_days" only.
+        boundaries: For "custom" strategy; list of boundaries, e.g. [0, 1, 2, 4, 7, 14].
     
     Returns:
-        Class index (range depends on strategy).
+        Class index (0-based).
     """
     if los_days < 0:
         return 0  # Invalid, default to bin 0
-    
+
+    if binning_strategy == "clinical_6bin":
+        for i in range(len(CLINICAL_6BIN_BOUNDARIES) - 1):
+            if CLINICAL_6BIN_BOUNDARIES[i] <= los_days < CLINICAL_6BIN_BOUNDARIES[i + 1]:
+                return i
+        return len(CLINICAL_6BIN_BOUNDARIES) - 2  # last bin [14, +inf)
+
+    if binning_strategy == "custom" and boundaries is not None:
+        for i in range(len(boundaries) - 1):
+            if boundaries[i] <= los_days < boundaries[i + 1]:
+                return i
+        return len(boundaries) - 2  # last bin
+
     if binning_strategy == "intervals":
         # [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf) => max_days+1 classes
         if los_days >= max_days:
@@ -332,6 +357,11 @@ def get_num_classes_from_config(config: Dict[str, Any]) -> Optional[int]:
         return max_days + 1  # [0,1), [1,2), ..., [max_days-1, max_days), [max_days, +inf)
     elif strategy == "exact_days":
         return max_days + 1  # 1 day, 2 days, ..., max_days days, >= max_days+1
+    elif strategy == "clinical_6bin":
+        return len(CLINICAL_6BIN_BOUNDARIES) - 1  # 6 bins
+    elif strategy == "custom":
+        boundaries = los_binning_config.get("boundaries", [])
+        return len(boundaries) - 1 if len(boundaries) >= 2 else 10
     else:
         raise ValueError(f"Unknown binning_strategy: {strategy}")
 
@@ -371,6 +401,27 @@ def get_class_labels_from_config(config: Dict[str, Any]) -> List[str]:
     elif strategy == "exact_days":
         labels = [f"{i} day" if i == 1 else f"{i} days" for i in range(1, max_days + 1)]
         labels.append(f">={max_days+1} days")
+        return labels
+    elif strategy == "clinical_6bin":
+        return [
+            "<24h",
+            "1 day",
+            "2–3 days (short)",
+            "4–6 days (medium)",
+            "1–2 weeks",
+            "2+ weeks",
+        ]
+    elif strategy == "custom":
+        boundaries = los_binning_config.get("boundaries", [])
+        if len(boundaries) < 2:
+            return [f"Bin {i}" for i in range(10)]
+        labels = []
+        for i in range(len(boundaries) - 1):
+            lo, hi = boundaries[i], boundaries[i + 1]
+            if hi == float("inf"):
+                labels.append(f"[{int(lo)}+ days")
+            else:
+                labels.append(f"[{int(lo)},{int(hi)}) days")
         return labels
     else:
         raise ValueError(f"Unknown binning_strategy: {strategy}")

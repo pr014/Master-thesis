@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=hubert_ecg_24h_phase1
+#SBATCH --job-name=hubert_ecg_24h_phase12
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=06:00:00          # Phase 1 only (frozen backbone, head-only): ~4-5h
+#SBATCH --time=12:00:00          # Phase 1 + Phase 2 (frozen + unfrozen): ~8-10h
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -86,7 +86,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # ============================================================================
 
 echo "============================================================"
-echo "Training HuBERT-ECG - Phase 1 Only (Frozen Backbone / Head-Only)"
+echo "Training HuBERT-ECG - Phase 1 + Phase 2 (Frozen → Unfrozen)"
 echo "Pretrained Weights: Enabled | Demographics: Disabled"
 echo "============================================================"
 
