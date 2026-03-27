@@ -4,7 +4,7 @@ SOFA Score (Sequential Organ Failure Assessment)
 Implementierung des SOFA Scores nach klinischem Standard.
 
 Usage:
-    from src.baseline_models.sofa import calculate_sofa_from_dict
+    from src.scoring_models.sofa import calculate_sofa_from_dict
     
     patient_data = {
         'pao2_fio2_ratio': 250,
@@ -38,10 +38,13 @@ from .calculator import (
 )
 
 from .data_loader import load_sofa_data
+from .ecg_stay_mapping import build_ecg_stay_mapping, unique_stay_ids_from_mapping
 
 __all__ = [
     'calculate_sofa_from_dict',
     'calculate_sofa_batch',
     'load_sofa_data',
+    'build_ecg_stay_mapping',
+    'unique_stay_ids_from_mapping',
 ]
 

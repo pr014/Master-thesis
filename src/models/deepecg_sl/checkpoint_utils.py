@@ -59,8 +59,13 @@ def load_wcr_checkpoint(
             )
         base_ssl_path = str(base_ssl_path)
     
-    # Prepare overrides
-    overrides = {"model_path": base_ssl_path}
+    # Ensure absolute path (fairseq may resolve relative paths from cwd)
+    base_ssl_path_obj = Path(base_ssl_path)
+    if not base_ssl_path_obj.is_absolute():
+        base_ssl_path = str(base_ssl_path_obj.resolve())
+    
+    # Prepare overrides - use nested key so overwrite_args_by_name correctly sets cfg.model.model_path
+    overrides = {"model": {"model_path": base_ssl_path}}
     
     # Load model
     model, args, task = checkpoint_utils.load_model_and_task(

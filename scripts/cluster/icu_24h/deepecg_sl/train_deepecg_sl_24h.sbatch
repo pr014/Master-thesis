@@ -2,7 +2,7 @@
 #SBATCH --job-name=deepecg_sl_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=10:00:00          # Extended time for two-phase training (Phase 1: 2-3h, Phase 2: 4-5h, total ~6.5-8h)
+#SBATCH --time=03:00:00          # Extended time for two-phase training (Phase 1: 2-3h, Phase 2: 4-5h, total ~6.5-8h)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
@@ -97,6 +97,9 @@ fi
 
 # 5. ENVIRONMENT VARIABLES SETZEN
 export ICUSTAYS_PATH="${SLURM_SUBMIT_DIR}/data/labeling/labels_csv/icustays.csv"
+# HuggingFace API Key für gated Models (heartwise/wcr_*) – falls Modell nicht lokal:
+# export HUGGINGFACE_API_KEY="hf_your_token"
+# Oder Modell vorab nach data/pretrained_weights/deepecg_sl/WCR_77_classes/ legen
 if [ ! -f "${ICUSTAYS_PATH}" ]; then
   echo "ERROR: icustays.csv not found at: ${ICUSTAYS_PATH}"
   exit 1

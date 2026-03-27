@@ -45,8 +45,8 @@ def plot_top15_diagnoses_los(results_df: pd.DataFrame, diagnosis_list: List[str]
     
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     
-    # Create color map: red for significant, green for not significant
-    colors = ['#d62728' if x < 0.05 else '#2ca02c' for x in top15_results['p_value']]
+    # Create color map: green for significant, blue for not significant (grün-blau statt rot-grün)
+    colors = ['#2ecc71' if x < 0.05 else '#3498db' for x in top15_results['p_value']]
     
     # Horizontal bar plot
     bars = ax.barh(range(len(top15_results)), top15_results['los_difference'], 
@@ -58,7 +58,7 @@ def plot_top15_diagnoses_los(results_df: pd.DataFrame, diagnosis_list: List[str]
     
     # Labels and title
     ax.set_xlabel('LOS Difference (days)', fontsize=13, fontweight='bold')
-    ax.set_title('Top 15 Diagnoses: Influence on Length of Stay (LOS)\n(Red = significant p<0.05, Green = not significant)', 
+    ax.set_title('Top 15 Diagnoses: Influence on Length of Stay (LOS)\n(Green = significant p<0.05, Blue = not significant)', 
                  fontsize=14, fontweight='bold', pad=20)
     
     # Add zero line
@@ -102,8 +102,8 @@ def plot_top15_diagnoses_mortality(results_df: pd.DataFrame, diagnosis_list: Lis
     
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
     
-    # Create color map: red for significant, green for not significant
-    colors = ['#d62728' if x < 0.05 else '#2ca02c' for x in top15_results['p_value']]
+    # Create color map: green for significant, blue for not significant (grün-blau statt rot-grün)
+    colors = ['#2ecc71' if x < 0.05 else '#3498db' for x in top15_results['p_value']]
     
     # Horizontal bar plot (mortality difference in percentage)
     bars = ax.barh(range(len(top15_results)), top15_results['mortality_difference'] * 100, 
@@ -115,7 +115,7 @@ def plot_top15_diagnoses_mortality(results_df: pd.DataFrame, diagnosis_list: Lis
     
     # Labels and title
     ax.set_xlabel('Mortality Difference (%)', fontsize=13, fontweight='bold')
-    ax.set_title('Top 15 Diagnoses: Influence on Mortality\n(Red = significant p<0.05, Green = not significant)', 
+    ax.set_title('Top 15 Diagnoses: Influence on Mortality\n(Green = significant p<0.05, Blue = not significant)', 
                  fontsize=14, fontweight='bold', pad=20)
     
     # Add zero line

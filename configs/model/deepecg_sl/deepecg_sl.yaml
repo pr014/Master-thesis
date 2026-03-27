@@ -52,14 +52,47 @@ data:
     lead_dropout_prob: 0.1
   
   demographic_features:
-    enabled: true
+    enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
   
   diagnosis_features:
     enabled: false
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    diagnosis_list:
+      - I10       # Essential (primary) hypertension
+      - E785      # Hyperlipidemia, unspecified
+      - I2510     # Atherosclerotic heart disease of native coronary artery without angina pectoris
+      - I4891     # Unspecified atrial fibrillation
+      - N179      # Acute kidney failure, unspecified
+      - I509      # Heart failure, unspecified
+      - Z87891    # Personal history of nicotine dependence
+      - K219      # Gastro-esophageal reflux disease without esophagitis
+      - E872      # Acidosis
+      - J9690     # Respiratory failure, unspecified, unspecified whether with hypoxia or hypercapnia
+      - D62       # Acute posthemorrhagic anemia
+      - E119      # Type 2 diabetes mellitus without complications
+      - Z7901     # Long term (current) use of anticoagulants
+      - D649      # Anemia, unspecified
+      - N390      # Urinary tract infection, site not specified
+      - R6521     # Severe sepsis with septic shock
+      - Z66       # Do not resuscitate
+      - A419      # Sepsis, unspecified organism
+      - F329      # Major depressive disorder, single episode, unspecified
+      - J189      # Pneumonia, unspecified organism
+      - I129      # Hypertensive chronic kidney disease with stage 1 through stage 4 chronic kidney disease, or unspecified chronic kidney disease
+      - E871      # Hypo-osmolality and hyponatremia
+      - N170      # Acute kidney failure with tubular necrosis
+      - Z781      # Physical restraint status
+      - E039      # Hypothyroidism, unspecified
+    diagnosis_columns:
+      - "all_diag_all"
+      - "all_diag_hosp"
+      - "hosp_diag_hosp"
+      - "ed_diag_hosp"
+    missing_strategy: "zero"
   
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     icu_unit_list:
       - "Medical Intensive Care Unit (MICU)"
@@ -88,8 +121,8 @@ model:
   # - 4 Conv layers [(256, 2, 2)] for feature extraction
   # - 12 Transformer encoder layers with embed_dim=768
   wcr:
-    model_name: "wcr_77_classes"
-    huggingface_repo: "heartwise/wcr_77_classes"
+    model_name: "wcr_afib_5Y"
+    huggingface_repo: "heartwise/wcr_afib_5y"
     base_ssl_path: "base_ssl.pt"
     d_model: 768                    # Transformer encoder embed dimension (from checkpoint)
     freeze_backbone: false          # Full fine-tuning: gesamtes Modell + Demographics
@@ -104,11 +137,10 @@ model:
     kernel_size: 3
     stride: 2
     
-  # Pretrained weights (automatic download)
+  # Pretrained weights (local files only; see WCREncoder resolution in wcr_encoder.py)
   pretrained:
     enabled: true
     cache_dir: "data/pretrained_weights/deepecg_sl"
-    # API Key from environment variable HUGGINGFACE_API_KEY
     
   # Feature dimensions
   feature_dim: 768                  # Output from WCR encoder (encoder_embed_dim)

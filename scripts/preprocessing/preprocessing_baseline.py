@@ -1,19 +1,19 @@
-"""Baseline preprocessing pipeline for ECG datasets.
+"""Baseline preprocessing pipeline for ECG datasets (P2: ohne Z-Score).
 
-This script applies the standardized baseline preprocessing pipeline to any ECG dataset:
+This script applies the preprocessing pipeline (P2) to any ECG dataset:
 1. Loads all ECG files from the source directory
-2. Applies preprocessing pipeline (resample → filter → segment → normalize)
+2. Applies preprocessing pipeline (filter → resample → segment)
 3. Saves preprocessed signals as NumPy arrays (.npy files)
 4. Preserves directory structure and metadata
 
-The preprocessed dataset can then be used for training all models with consistent preprocessing.
-
 Pipeline (filtering before resampling to avoid aliasing):
-- Bandpass filtering (0.5-50 Hz, Butterworth 4th order)
+- Bandpass filtering (0.5-50 Hz, Butterworth 4th order, filtfilt)
 - Notch filtering (60 Hz for US power line frequency)
 - Resampling to 500 Hz
 - Segmentation to 10 seconds (5000 samples)
-- Z-score normalization per lead
+- Kein Z-Score (explizit deaktiviert)
+
+For icu_ecgs_24h: source data/icu_ecgs_24h/original -> output data/icu_ecgs_24h/P2.
 
 Supports large datasets (60k+ ECGs) with multiprocessing.
 """
@@ -63,10 +63,9 @@ def preprocess_and_save(
     filter_highcut: float = 50.0,
     filter_order: int = 4,
     notch_freq: float = 60.0,
-    normalize: bool = True,
     skip_existing: bool = False,
 ) -> Dict:
-    """Preprocess a single ECG record and save it.
+    """Preprocess a single ECG record and save it (P2 pipeline, kein Z-Score).
     
     Args:
         base_path: Path to ECG record (without .hea/.dat extension).
@@ -77,7 +76,6 @@ def preprocess_and_save(
         filter_lowcut: Low cutoff frequency in Hz.
         filter_highcut: High cutoff frequency in Hz.
         filter_order: Butterworth filter order.
-        normalize: Whether to apply Z-score normalization.
     
     Returns:
         Dictionary with processing results (success, error message, etc.).
@@ -86,7 +84,7 @@ def preprocess_and_save(
         # Load ECG record
         x, fs, base_date, base_time = load_ecg_record(base_path)
         
-        # Apply preprocessing pipeline
+        # Apply preprocessing pipeline (P2: Bandpass → Notch → Resample → Segment, kein Z-Score)
         x_processed, effective_fs = preprocess_ecg_signal(
             x=x,
             fs=fs,
@@ -96,7 +94,7 @@ def preprocess_and_save(
             filter_highcut=filter_highcut,
             filter_order=filter_order,
             notch_freq=notch_freq,
-            normalize=normalize,
+            normalize=False,  # P2: Z-Score explizit ausgeschaltet
         )
         
         # Determine output path (preserve relative structure from source_dir)
@@ -158,10 +156,9 @@ def main():
     parser.add_argument(
         '--source',
         type=str,
-        default=r"D:\MA\data\mimic-iv-ecg\icustay_ecgs_24h\files",
+        default="data/icu_ecgs_24h/original",
         help='Source directory containing ECG files (.hea/.dat). '
-             'Can be icustay_ecgs_24h/files or icustay_ecgs/files. '
-             'For icustay_ecgs_24h, output will be automatically set to preprocessed_24h_1'
+             'Example: data/icu_ecgs_24h/original -> output data/icu_ecgs_24h/P2.'
     )
     parser.add_argument(
         '--output',
@@ -208,11 +205,6 @@ def main():
         help='Notch filter frequency in Hz for power line removal (default: 60.0 for US)'
     )
     parser.add_argument(
-        '--no-normalize',
-        action='store_true',
-        help='Skip Z-score normalization (default: normalize is enabled)'
-    )
-    parser.add_argument(
         '--limit',
         type=int,
         default=None,
@@ -237,24 +229,22 @@ def main():
     
     # Auto-detect output directory if not specified
     if args.output is None:
-        # If source is in icustay_ecgs_24h/files, use icustay_ecgs_24h/preprocessed_24h_1
         source_str = str(source_dir).replace("\\", "/")
-        if "icustay_ecgs_24h/files" in source_str:
-            # Replace /files with /preprocessed_24h_1
+        if "icu_ecgs_24h/original" in source_str:
+            # data/icu_ecgs_24h/original -> data/icu_ecgs_24h/P2 (kein Z-Score)
+            icu_root = Path(source_str.replace("/original", ""))
+            output_dir = icu_root / "P2"
+        elif "icustay_ecgs_24h/files" in source_str:
             output_str = source_str.replace("/files", "/preprocessed_24h_1")
             output_dir = Path(output_str)
         elif "icustay_ecgs/files" in source_str and "24h" not in source_str:
-            # For icustay_ecgs (without 24h), use icustay_ecgs/preprocessed
             output_str = source_str.replace("/files", "/preprocessed")
             output_dir = Path(output_str)
         elif source_dir.name == "files" and "icustay_ecgs_24h" in str(source_dir.parent):
-            # If source_dir is .../icustay_ecgs_24h/files, use .../icustay_ecgs_24h/preprocessed_24h_1
             output_dir = source_dir.parent / "preprocessed_24h_1"
         elif source_dir.name == "files" and "icustay_ecgs" in str(source_dir.parent):
-            # If source_dir is .../icustay_ecgs/files, use .../icustay_ecgs/preprocessed
             output_dir = source_dir.parent / "preprocessed"
         else:
-            # Default: add _preprocessed suffix to source directory
             output_dir = Path(str(source_dir) + "_preprocessed")
     else:
         output_dir = Path(args.output)
@@ -276,7 +266,7 @@ def main():
     print(f"Window length: {args.window_seconds} seconds")
     print(f"Bandpass filter: {args.filter_lowcut}-{args.filter_highcut} Hz (order {args.filter_order})")
     print(f"Notch filter: {args.notch_freq} Hz (US power line frequency)")
-    print(f"Normalization: {'enabled' if not args.no_normalize else 'disabled'}")
+    print("Normalization: disabled (P2 pipeline, kein Z-Score)")
     print("=" * 70)
     
     # Find all ECG files
@@ -306,7 +296,6 @@ def main():
         filter_highcut=args.filter_highcut,
         filter_order=args.filter_order,
         notch_freq=args.notch_freq,
-        normalize=not args.no_normalize,
         skip_existing=args.skip_existing,
     )
     

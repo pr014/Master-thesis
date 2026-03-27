@@ -236,23 +236,31 @@ def get_timestamp_mapping_path(data_dir: str) -> Path:
     data_path = Path(data_dir)
 
     # Create a stable identifier from the data directory name.
-    # Important: for the 24h datasets we standardize to the user-facing naming:
-    #   timestamps_mapping_24h_P{1|2|3}.csv
+    # Important: in this project setup, P2 shares ECGs with P1, so both use
+    # timestamps_mapping_24h_P1.csv.
     dataset_name = data_path.name
 
-    # Case A: preprocessed_24h_1 -> 24h_P1 (and similarly for _2/_3)
+    # Case A: preprocessed_24h_1 -> 24h_P1 (preprocessed_24h_2 also -> 24h_P1)
     if dataset_name.startswith("preprocessed_24h_"):
         suffix = dataset_name.replace("preprocessed_24h_", "")
         if suffix.isdigit():
-            dataset_name = f"24h_P{suffix}"
+            if suffix == "2":
+                dataset_name = "24h_P1"
+            else:
+                dataset_name = f"24h_P{suffix}"
 
-    # Case B: icu_ecgs_24h_P1 -> 24h_P1
+    # Case B: icu_ecgs_24h_P1 -> 24h_P1 (icu_ecgs_24h_P2 -> 24h_P1)
     if dataset_name.startswith("icu_ecgs_24h_P"):
         dataset_name = dataset_name.replace("icu_ecgs_24h_", "")
+        if dataset_name == "P2":
+            dataset_name = "P1"
 
-    # Case C: data/icu_ecgs_24h/P1 -> 24h_P1
+    # Case C: data/icu_ecgs_24h/P1 -> 24h_P1 (P2 -> 24h_P1)
     if dataset_name in {"P1", "P2", "P3"} and data_path.parent.name == "icu_ecgs_24h":
-        dataset_name = f"24h_{dataset_name}"
+        if dataset_name == "P2":
+            dataset_name = "24h_P1"
+        else:
+            dataset_name = f"24h_{dataset_name}"
 
     # Fallback: keep directory name (but normalize)
     dataset_name = dataset_name.replace("-", "_")

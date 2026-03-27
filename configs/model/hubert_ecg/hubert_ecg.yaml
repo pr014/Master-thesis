@@ -1,6 +1,7 @@
-# HuBERT-ECG - Vollständige Konfiguration
-# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# HuBERT-ECG large - Vollständige Konfiguration (H2 / clones/HuBERT-ECG)
+# Large pretrained weights (hidden_size=960) | Keine Late-Fusion-Features | Alle Augmentations
 # Self-supervised pretrained model with Transfer Learning
+# H2: LR head 1e-4, backbone 1e-5, deep 1e-7 | AdamW | LinearScheduleWithWarmup 8% | feature extractor frozen in Phase 2
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -41,10 +42,17 @@ data:
     amplitude_scaling: true
     scale_min: 0.85
     scale_max: 1.15
+    baseline_wander: true
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08
+    lead_dropout: true
+    lead_dropout_prob: 0.1
   
-  # Variable Late Fusion Features
+  # Variable Late Fusion Features (alle ausgeschaltet)
   demographic_features:
-    enabled: false  # Disabled for head-only baseline (H1)
+    enabled: false
   
   diagnosis_features:
     enabled: false
@@ -59,10 +67,12 @@ model:
   
   # HuBERT Encoder Configuration
   hubert:
-    checkpoint_path: "model.safetensors"  # Relative to cache_dir, or absolute path
-    config_path: "config.json"  # Optional, relative to cache_dir
-    hidden_size: 768  # HuBERT hidden dimension
+    checkpoint_path: "model-2.safetensors"  # Relative to cache_dir, or absolute path
+    config_path: "config-2.json"  # Optional, relative to cache_dir
+    hidden_size: 960  # HuBERT large: 960
     freeze_backbone: true  # Initial freeze for transfer learning (Phase 1)
+    # Phase 2 unfrozen transformer needs far more VRAM; checkpointing trades compute for memory
+    gradient_checkpointing: true
     # Preprocessing configuration:
     # - apply_preprocessing: false (default) - Use for P1 dataset which is already preprocessed:
     #   * Bandpass: Butterworth (0.5-50 Hz, 4th order, filtfilt)
@@ -77,15 +87,15 @@ model:
     
   # NO input_adapter Config!
   # HuBERT has built-in Feature Extractor (5 Conv Layers with downsampling)
-  # Input: (B, 12, 5000) @ 500Hz → Feature Extractor → (B, seq_len, 768)
+  # Input: (B, 12, 5000) @ 500Hz → Feature Extractor → (B, seq_len, 512)
   
-  # Pretrained weights
+  # Pretrained weights (large: hidden_size=960)
   pretrained:
     enabled: true
-    cache_dir: "data/pretrained_weights/Hubert_ECG/base"
+    cache_dir: "data/pretrained_weights/Hubert_ECG/large"
     
-  # Feature dimensions
-  feature_dim: 768  # Output from HuBERT encoder
+  # Feature dimensions (large encoder output: 960)
+  feature_dim: 960  # Output from HuBERT large encoder
   shared_dim: 128  # Shared layer dimension
 
 # =============================================================================
@@ -93,25 +103,26 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 32  # Reduced from 64 to avoid OOM (HuBERT encoder activations ~78 GB)
+  # Large + Phase 2 (unfrozen transformer): use 8 (with gradient_checkpointing); raise if VRAM allows
+  batch_size: 8
   num_epochs: 50
   num_workers: 4
   pin_memory: true
   
   optimizer:
-    type: "Adam"
-    lr: 5e-4
-    weight_decay: 1e-4
-    betas: [0.9, 0.999]
+    type: "AdamW"
+    lr: 1e-4  # Phase 1 / head LR (H2; min 1e-7 enforced to prevent LR=0 bug)
+    backbone_lr: 1e-5  # Phase 2: last 4 transformer layers
+    deep_backbone_lr: 1e-7  # Phase 2: feature projection + earlier transformer layers
+    weight_decay: 0.01
+    betas: [0.9, 0.98]
   
   gradient_clip_norm: 1.0
   dropout_rate: 0.1  # classifier_dropout_prob from original HuBERT-ECG paper (default: 0.1)
   
   scheduler:
-    type: "ReduceLROnPlateau"
-    factor: 0.1
-    patience: 5
-    min_lr: 1e-6
+    type: "LinearScheduleWithWarmup"
+    warmup_steps_pct: 0.08
   
   loss:
     type: "mse"

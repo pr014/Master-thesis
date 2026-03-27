@@ -38,15 +38,15 @@ data:
     enabled: true
     gaussian_noise: true
     noise_std: 0.03
-    amplitude_scaling: true
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
-    baseline_wander: true
+    baseline_wander: false
     bw_freq_min: 0.15
     bw_freq_max: 0.4
     bw_amp_min: 0.03
     bw_amp_max: 0.08
-    lead_dropout: true
+    lead_dropout: false
     lead_dropout_prob: 0.1
   
   demographic_features:
@@ -62,7 +62,7 @@ data:
 
   # Oversampling: rare LOS bins drawn more often, then augmented like all samples
   oversample_minority:
-    enabled: true
+    enabled: false
     rare_bins: [4, 5]  # clinical_6bin: [7,14) and [14,+inf) days
     weight: 3.0  # oversample factor for rare bins
 

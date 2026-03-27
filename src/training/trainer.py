@@ -257,6 +257,7 @@ class Trainer:
                 self.criterion,
                 self.device,
                 self.config,
+                scheduler=self.scheduler,
             )
             
             # Validation
@@ -266,6 +267,7 @@ class Trainer:
                     self.val_loader,
                     self.criterion,
                     self.device,
+                    config=self.config,
                 )
             else:
                 val_metrics = {}
@@ -279,7 +281,7 @@ class Trainer:
                     monitor_metric = self.early_stopping.monitor
                     metric_value = all_metrics.get(monitor_metric, train_metrics.get("train_loss", 0.0))
                     self.scheduler.step(metric_value)
-                else:
+                elif self.config.get("training", {}).get("scheduler", {}).get("type") != "LinearScheduleWithWarmup":
                     self.scheduler.step()
             
             # Update history

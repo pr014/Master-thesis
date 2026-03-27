@@ -54,6 +54,38 @@ def construct_ecg_time(base_date: Optional[str], base_time: Optional[str]) -> Op
         return None
 
 
+def _project_root() -> Path:
+    """Repository root (parent of ``src``)."""
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def tabular_join_path_key(base_path: str, data_dir: Optional[str]) -> str:
+    """Normalize ECG path for joining tabular files (e.g. SOFA CSV) to ``data_dir``."""
+    if not base_path:
+        return ""
+    raw = Path(str(base_path).replace("\\", "/"))
+    data_dir_path: Optional[Path] = None
+    if data_dir:
+        dp = Path(str(data_dir).replace("\\", "/"))
+        if not dp.is_absolute():
+            dp = _project_root() / dp
+        try:
+            data_dir_path = dp.resolve()
+        except OSError:
+            data_dir_path = dp
+    try:
+        if data_dir_path is not None:
+            if raw.is_absolute():
+                resolved = raw.resolve()
+            else:
+                resolved = (data_dir_path / raw).resolve()
+            rel = resolved.relative_to(data_dir_path)
+            return rel.as_posix()
+    except (ValueError, OSError):
+        pass
+    return raw.as_posix()
+
+
 class ECGDataset(Dataset):
     """PyTorch Dataset for ECG signals with LOS regression labels.
     
@@ -112,6 +144,7 @@ class ECGDataset(Dataset):
                 preprocess=preprocess,
                 window_seconds=window_seconds,
             )
+        self._data_dir = data_dir
         self.labels = labels if labels is not None else {}
         self.mortality_labels = mortality_labels if mortality_labels is not None else {}
         # If caller did not provide per-ECG mortality labels, generate them from ICUStayMapper
@@ -153,6 +186,16 @@ class ECGDataset(Dataset):
         # Load ICU unit features if enabled
         if self.icu_unit_features_enabled:
             self._load_icu_unit_features()
+        
+        # SOFA tabular features (late fusion)
+        self.sofa_features_config = data_config.get("sofa_features", {})
+        self.sofa_features_enabled = self.sofa_features_config.get("enabled", False)
+        self.sofa_mapping: Dict[str, List[float]] = {}
+        self.sofa_features_dim = 0
+        self._sofa_norm_mean: Optional[List[float]] = None
+        self._sofa_norm_std: Optional[List[float]] = None
+        if self.sofa_features_enabled:
+            self._load_sofa_features()
         
         # Task type: "regression" (default) or "classification" (backward compatibility)
         self.task_type = data_config.get("task_type", "regression")
@@ -861,6 +904,90 @@ class ECGDataset(Dataset):
             # Unknown encoding, return None
             return None
     
+    def _load_sofa_features(self) -> None:
+        """Load SOFA columns from CSV; keys match ``tabular_join_path_key`` with ``data_dir``."""
+        csv_path = self.sofa_features_config.get("csv_path", "data/labeling/labels_csv/sofa_scores.csv")
+        path = Path(csv_path)
+        if not path.is_absolute():
+            path = _project_root() / path
+        if not path.exists():
+            print(f"Warning: SOFA CSV not found at {path}. Disabling sofa_features.")
+            self.sofa_features_enabled = False
+            return
+        columns = self.sofa_features_config.get("columns", ["sofa_total"])
+        if isinstance(columns, str):
+            columns = [columns]
+        require_available = self.sofa_features_config.get("require_available", True)
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            print(f"Warning: Failed to load SOFA CSV: {e}. Disabling sofa_features.")
+            self.sofa_features_enabled = False
+            return
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            print(f"Warning: SOFA CSV missing columns {missing}. Disabling sofa_features.")
+            self.sofa_features_enabled = False
+            return
+        if require_available and "sofa_available" in df.columns:
+            sa = df["sofa_available"]
+            if sa.dtype == object:
+                df = df.loc[sa.astype(str).str.lower().isin(("true", "1", "yes"))].copy()
+            else:
+                df = df.loc[sa.astype(bool)].copy()
+        self.sofa_mapping = {}
+        all_rows: List[List[float]] = []
+        for _, row in df.iterrows():
+            bp = row.get("base_path")
+            if pd.isna(bp):
+                continue
+            key = tabular_join_path_key(str(bp), self._data_dir)
+            vec: List[float] = []
+            skip = False
+            for col in columns:
+                v = row[col]
+                if pd.isna(v):
+                    vec.append(0.0)
+                else:
+                    try:
+                        vec.append(float(v))
+                    except (TypeError, ValueError):
+                        skip = True
+                        break
+            if skip:
+                continue
+            self.sofa_mapping[key] = vec
+            all_rows.append(vec)
+        self.sofa_features_dim = len(columns)
+        norm = self.sofa_features_config.get("normalize", "none")
+        if norm == "zscore" and all_rows and self.sofa_features_dim > 0:
+            arr = np.array(all_rows, dtype=np.float64)
+            self._sofa_norm_mean = arr.mean(axis=0).tolist()
+            std = arr.std(axis=0)
+            self._sofa_norm_std = [s if s > 1e-8 else 1.0 for s in std.tolist()]
+        else:
+            self._sofa_norm_mean = None
+            self._sofa_norm_std = None
+        print(
+            f"Loaded SOFA features from {path}: {len(self.sofa_mapping):,} rows, "
+            f"dim={self.sofa_features_dim}, columns={columns}"
+        )
+    
+    def _get_sofa_features(self, base_path: str) -> torch.Tensor:
+        """SOFA feature vector for ``base_path`` (zeros if missing)."""
+        if not self.sofa_features_enabled or self.sofa_features_dim == 0:
+            return torch.zeros(0, dtype=torch.float32)
+        key = tabular_join_path_key(base_path, self._data_dir)
+        vec = self.sofa_mapping.get(key)
+        if vec is None:
+            vec = [0.0] * self.sofa_features_dim
+        if self._sofa_norm_mean is not None and self._sofa_norm_std is not None:
+            vec = [
+                (vec[i] - self._sofa_norm_mean[i]) / self._sofa_norm_std[i]
+                for i in range(self.sofa_features_dim)
+            ]
+        return torch.tensor(vec, dtype=torch.float32)
+    
     def _log_statistics(self) -> None:
         """Log dataset statistics after filtering."""
         total_before_filter = self.matched_count + self.unmatched_count
@@ -890,6 +1017,8 @@ class ECGDataset(Dataset):
                 print(f"  Diagnosis features: Enabled ({len(self.diagnosis_mapping):,} mappings, {self.diagnosis_dim} diagnoses)")
             if self.icu_unit_features_enabled:
                 print(f"  ICU unit features: Enabled ({len(self.icu_unit_mapping):,} mappings, {self.icu_unit_dim} units)")
+            if self.sofa_features_enabled:
+                print(f"  SOFA features: Enabled ({len(self.sofa_mapping):,} mappings, dim={self.sofa_features_dim})")
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get item from dataset.
@@ -1005,6 +1134,9 @@ class ECGDataset(Dataset):
         # Add ICU unit features if available
         if icu_unit_features is not None:
             result["icu_unit_features"] = icu_unit_features
+        
+        if self.sofa_features_enabled and self.sofa_features_dim > 0:
+            result["sofa_features"] = self._get_sofa_features(base_path)
         
         # Sample weight for regression (only when weighting is active)
         if self.regression_weights is not None and label >= 0:

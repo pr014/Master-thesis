@@ -242,8 +242,7 @@ def main():
     pretrained_config = model_config.get('pretrained', {})
     if pretrained_config.get('enabled', False):
         cache_dir = pretrained_config.get('cache_dir', 'data/pretrained_weights/deepecg_sl')
-        print(f"Pretrained weights: Enabled (cache: {cache_dir})")
-        print("  Weights will be downloaded automatically from HuggingFace if not cached")
+        print(f"Pretrained weights: Enabled (local cache: {cache_dir})")
     else:
         print("Pretrained weights: Disabled (training from scratch)")
     
@@ -290,9 +289,9 @@ def main():
         mortality_labels=None,
     )
     
-    # Create base model (will automatically download weights if needed)
+    # Create base model (loads WCR weights from model.pretrained.cache_dir)
     print("\nCreating DeepECG-SL model...")
-    print("This may take a while on first run (downloading pretrained weights)...")
+    print("Loading WCR weights from local cache (see model.pretrained.cache_dir)...")
     base_model = DeepECG_SL(config)
     print(f"Model created with {base_model.count_parameters():,} parameters")
     

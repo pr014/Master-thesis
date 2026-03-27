@@ -93,6 +93,10 @@ def resolve_path(path: str, base_dir: Optional[Path] = None) -> Path:
     return Path(path).resolve()
 
 
+# Keys that match *_path but are filenames relative to a model bundle, not project paths.
+_PATH_EXPAND_SKIP_KEYS = frozenset({"base_ssl_path"})
+
+
 def expand_paths_in_config(config: Dict[str, Any], base_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Recursively expand paths in configuration dictionary.
     
@@ -111,7 +115,11 @@ def expand_paths_in_config(config: Dict[str, Any], base_dir: Optional[Path] = No
     for key, value in config.items():
         if isinstance(value, dict):
             result[key] = expand_paths_in_config(value, base_dir)
-        elif isinstance(value, str) and key.endswith(('_dir', '_path', '_file', 'dir', 'path')):
+        elif (
+            isinstance(value, str)
+            and key.endswith(('_dir', '_path', '_file', 'dir', 'path'))
+            and key not in _PATH_EXPAND_SKIP_KEYS
+        ):
             # Try to resolve as path
             try:
                 result[key] = str(resolve_path(value, base_dir))

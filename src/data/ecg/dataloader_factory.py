@@ -8,7 +8,13 @@ import pandas as pd
 from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 
-from .ecg_dataset import ECGDataset, build_demo_index, extract_subject_id_from_path, construct_ecg_time
+from .ecg_dataset import (
+    ECGDataset,
+    build_demo_index,
+    extract_subject_id_from_path,
+    construct_ecg_time,
+    tabular_join_path_key,
+)
 from .ecg_loader import build_npy_index
 from ..labeling.icu_los_labels import los_to_bin
 from .timestamp_mapping import (
@@ -236,6 +242,51 @@ def compute_oversample_weights(
     return weights_list
 
 
+def filter_records_to_valid_sofa(
+    records: List[Dict[str, Any]],
+    data_config: Dict[str, Any],
+    data_dir: str,
+) -> List[Dict[str, Any]]:
+    """Keep only ECG records that have a valid SOFA row (optional; config-driven)."""
+    sofa_cfg = data_config.get("sofa_features", {})
+    if not sofa_cfg.get("enabled", False):
+        return records
+    if not sofa_cfg.get("filter_to_valid_sofa", True):
+        return records
+    csv_rel = sofa_cfg.get("csv_path", "data/labeling/labels_csv/sofa_scores.csv")
+    csv_path = Path(csv_rel)
+    if not csv_path.is_absolute():
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        csv_path = root / csv_path
+    if not csv_path.exists():
+        raise FileNotFoundError(f"SOFA CSV not found: {csv_path}")
+    df = pd.read_csv(csv_path)
+    require_available = sofa_cfg.get("require_available", True)
+    if require_available and "sofa_available" in df.columns:
+        sa = df["sofa_available"]
+        if sa.dtype == object:
+            df = df.loc[sa.astype(str).str.lower().isin(("true", "1", "yes"))].copy()
+        else:
+            df = df.loc[sa.astype(bool)].copy()
+    valid_keys = set()
+    for _, row in df.iterrows():
+        bp = row.get("base_path")
+        if pd.isna(bp):
+            continue
+        valid_keys.add(tabular_join_path_key(str(bp), data_dir))
+    out: List[Dict[str, Any]] = []
+    for r in records:
+        k = tabular_join_path_key(r.get("base_path", ""), data_dir)
+        if k in valid_keys:
+            out.append(r)
+    print(f"SOFA cohort filter: {len(records):,} -> {len(out):,} records")
+    if len(out) == 0:
+        raise ValueError(
+            "SOFA filter removed all records; check base_path alignment with sofa_scores.csv"
+        )
+    return out
+
+
 def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Custom collate function that preserves meta as a list of dicts.
     
@@ -313,6 +364,21 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             result["icu_unit_features"] = None
     else:
         result["icu_unit_features"] = None
+    
+    if "sofa_features" in batch[0]:
+        sofa_list = [item.get("sofa_features") for item in batch]
+        if any(f is not None for f in sofa_list):
+            first = next(f for f in sofa_list if f is not None)
+            sdim = first.shape[0]
+            filled = [
+                f if f is not None else torch.zeros(sdim, dtype=torch.float32)
+                for f in sofa_list
+            ]
+            result["sofa_features"] = torch.stack(filled)
+        else:
+            result["sofa_features"] = None
+    else:
+        result["sofa_features"] = None
     
     if "sample_weight" in batch[0]:
         result["sample_weight"] = torch.stack([item["sample_weight"] for item in batch])
@@ -664,6 +730,8 @@ def create_dataloaders(
         records = build_demo_index(data_dir=data_dir)
         using_npy = False
     
+    records = filter_records_to_valid_sofa(records, data_config, data_dir)
+    
     # Load or create timestamp mapping if using .npy files
     timestamp_mapping = None
     if using_npy:
@@ -830,16 +898,21 @@ def create_dataloaders(
     )
     
     # Oversampling: WeightedRandomSampler for rare LOS bins (when enabled)
+    # IMPORTANT: Use filtered records from train_dataset (ECGDataset drops unmatched),
+    # otherwise WeightedRandomSampler can draw indices >= len(dataset) -> IndexError
     sampler = None
     oversample_weights = compute_oversample_weights(
-        train_records,
+        train_dataset.ecg_dataset.records,  # Filtered records, matches dataset indices
         icu_mapper,
         config,
         timestamp_mapping=timestamp_mapping,
         data_dir=data_dir,
     )
     if oversample_weights is not None:
-        # WeightedRandomSampler needs weights as tensor, num_samples = len(dataset)
+        # Weights length must equal len(dataset); filtered records guarantee this
+        assert len(oversample_weights) == len(train_dataset), (
+            f"Oversample weights length {len(oversample_weights)} != dataset length {len(train_dataset)}"
+        )
         weights_tensor = torch.tensor(oversample_weights, dtype=torch.float32)
         sampler = WeightedRandomSampler(
             weights=weights_tensor,

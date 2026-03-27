@@ -1,6 +1,6 @@
 """Common training loop implementation for regression and classification."""
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,6 +8,24 @@ from torch.utils.data import DataLoader
 
 from .losses import get_loss, MultiTaskLoss
 from .callbacks import EarlyStopping, ModelCheckpoint
+
+
+def _forward_aux_kwargs(
+    config: Dict[str, Any],
+    demographic_features: Optional[torch.Tensor],
+    diagnosis_features: Optional[torch.Tensor],
+    icu_unit_features: Optional[torch.Tensor],
+    sofa_features: Optional[torch.Tensor],
+) -> Dict[str, Any]:
+    """Keyword args for model forward; SOFA only if enabled (avoids TypeError on other architectures)."""
+    kw: Dict[str, Any] = {
+        "demographic_features": demographic_features,
+        "diagnosis_features": diagnosis_features,
+        "icu_unit_features": icu_unit_features,
+    }
+    if config.get("data", {}).get("sofa_features", {}).get("enabled", False):
+        kw["sofa_features"] = sofa_features
+    return kw
 
 
 def _is_multi_task_model(model: nn.Module) -> bool:
@@ -56,6 +74,7 @@ def train_epoch(
     criterion: nn.Module,
     device: torch.device,
     config: Dict[str, Any],
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
 ) -> Dict[str, float]:
     """Train for one epoch.
     
@@ -136,9 +155,24 @@ def train_epoch(
             if valid_mask.any():
                 icu_unit_features = icu_unit_features[valid_mask]
         
+        sofa_features = None
+        if "sofa_features" in batch and batch["sofa_features"] is not None:
+            sofa_features = batch["sofa_features"].to(device)
+            if valid_mask.any():
+                sofa_features = sofa_features[valid_mask]
+        
         # Forward pass
         optimizer.zero_grad()
-        outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
+        outputs = model(
+            signals,
+            **_forward_aux_kwargs(
+                config,
+                demographic_features,
+                diagnosis_features,
+                icu_unit_features,
+                sofa_features,
+            ),
+        )
         
         # Handle multi-task vs single-task
         if is_multi_task and isinstance(outputs, dict):
@@ -212,6 +246,8 @@ def train_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
         
         optimizer.step()
+        if scheduler is not None and config.get("training", {}).get("scheduler", {}).get("type") == "LinearScheduleWithWarmup":
+            scheduler.step()
         
         # Metrics
         total_loss += loss.item()
@@ -262,6 +298,7 @@ def validate_epoch(
     val_loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     """Validate for one epoch with stay-level aggregation.
     
@@ -283,6 +320,7 @@ def validate_epoch(
         Dictionary of validation metrics computed at stay-level.
     """
     model.eval()
+    cfg = config or {}
     is_multi_task = isinstance(criterion, MultiTaskLoss) or _is_multi_task_model(model)
     
     # Collect all predictions and metadata for stay-level aggregation
@@ -333,8 +371,22 @@ def validate_epoch(
                 icu_unit_features = batch["icu_unit_features"].to(device)
                 icu_unit_features = icu_unit_features[valid_mask]
             
+            sofa_features = None
+            if "sofa_features" in batch and batch["sofa_features"] is not None:
+                sofa_features = batch["sofa_features"].to(device)
+                sofa_features = sofa_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
+            outputs = model(
+                signals,
+                **_forward_aux_kwargs(
+                    cfg,
+                    demographic_features,
+                    diagnosis_features,
+                    icu_unit_features,
+                    sofa_features,
+                ),
+            )
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):
@@ -477,6 +529,7 @@ def evaluate_with_detailed_metrics(
     val_loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Evaluate model with detailed regression metrics.
     
@@ -529,6 +582,7 @@ def evaluate_with_detailed_metrics(
         raise ImportError("scikit-learn is required for detailed metrics. Install with: pip install scikit-learn")
     
     model.eval()
+    cfg = config or {}
     is_multi_task = isinstance(criterion, MultiTaskLoss) or _is_multi_task_model(model)
     
     # Collect all predictions and metadata for stay-level aggregation
@@ -578,8 +632,22 @@ def evaluate_with_detailed_metrics(
                 icu_unit_features = batch["icu_unit_features"].to(device)
                 icu_unit_features = icu_unit_features[valid_mask]
             
+            sofa_features = None
+            if "sofa_features" in batch and batch["sofa_features"] is not None:
+                sofa_features = batch["sofa_features"].to(device)
+                sofa_features = sofa_features[valid_mask]
+            
             # Forward pass
-            outputs = model(signals, demographic_features=demographic_features, diagnosis_features=diagnosis_features, icu_unit_features=icu_unit_features)
+            outputs = model(
+                signals,
+                **_forward_aux_kwargs(
+                    cfg,
+                    demographic_features,
+                    diagnosis_features,
+                    icu_unit_features,
+                    sofa_features,
+                ),
+            )
             
             # Handle multi-task vs single-task
             if is_multi_task and isinstance(outputs, dict):

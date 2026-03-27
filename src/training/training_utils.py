@@ -140,6 +140,7 @@ def evaluate_and_print_results(
         val_loader=test_loader,
         criterion=trainer.criterion,
         device=trainer.device,
+        config=trainer.config,
     )
     
     # Print formatted test results summary

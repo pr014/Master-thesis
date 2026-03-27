@@ -78,14 +78,27 @@ class MultiTaskECGModel(nn.Module):
         if use_icu_units:
             dummy_icu_unit_features = torch.zeros(1, icu_unit_dim, device=device)
         
+        sofa_config = data_config.get("sofa_features", {})
+        use_sofa = sofa_config.get("enabled", False)
+        sofa_columns = sofa_config.get("columns", ["sofa_total"])
+        if isinstance(sofa_columns, str):
+            sofa_columns = [sofa_columns]
+        sofa_dim = len(sofa_columns) if use_sofa else 0
+        dummy_sofa_features = None
+        if use_sofa and sofa_dim > 0:
+            dummy_sofa_features = torch.zeros(1, sofa_dim, device=device)
+        self._pass_sofa_to_backbone = bool(use_sofa and sofa_dim > 0)
+        
         with torch.no_grad():
             try:
-                features = base_model.get_features(
-                    dummy_input, 
+                _gf_kw = dict(
                     demographic_features=dummy_demographic_features,
                     diagnosis_features=dummy_diagnosis_features,
-                    icu_unit_features=dummy_icu_unit_features
+                    icu_unit_features=dummy_icu_unit_features,
                 )
+                if self._pass_sofa_to_backbone:
+                    _gf_kw["sofa_features"] = dummy_sofa_features
+                features = base_model.get_features(dummy_input, **_gf_kw)
                 feature_dim = features.shape[1]
             except NotImplementedError:
                 raise NotImplementedError(
@@ -115,7 +128,8 @@ class MultiTaskECGModel(nn.Module):
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
-        icu_unit_features: Optional[torch.Tensor] = None
+        icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Forward pass through multi-task model.
         
@@ -134,12 +148,14 @@ class MultiTaskECGModel(nn.Module):
                 - 'mortality': Mortality probabilities of shape (B, 1) in range [0, 1]
         """
         # Extract features using base model (includes demographic, diagnosis, and ICU unit features if enabled)
-        features = self.base_model.get_features(
-            x, 
+        _gf_kw = dict(
             demographic_features=demographic_features,
             diagnosis_features=diagnosis_features,
-            icu_unit_features=icu_unit_features
-        )  # (B, feature_dim)
+            icu_unit_features=icu_unit_features,
+        )
+        if getattr(self, "_pass_sofa_to_backbone", False):
+            _gf_kw["sofa_features"] = sofa_features
+        features = self.base_model.get_features(x, **_gf_kw)  # (B, feature_dim)
         
         # LOS regression head
         los_predictions = self.los_head(features)  # (B, 1) - continuous LOS in days

@@ -62,7 +62,7 @@ def main():
         mortality_rates.append(rate_pct)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    colors = "#e74c3c"  # light red/salmon
+    colors = "#6c757d"  # grau
     bars = ax.bar(los_days, mortality_rates, color=colors, alpha=0.85, edgecolor="black", linewidth=0.5)
 
     ax.set_xticks(los_days)

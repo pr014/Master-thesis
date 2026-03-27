@@ -6,7 +6,6 @@ import torch.nn as nn
 from pathlib import Path
 
 from .checkpoint_utils import load_wcr_checkpoint
-from .huggingface_loader import HuggingFaceModelLoader
 
 
 class WCREncoder(nn.Module):
@@ -25,10 +24,9 @@ class WCREncoder(nn.Module):
         
         Args:
             config: Configuration dictionary. Should contain:
-                - model.wcr.model_name: Model name (e.g., "wcr_77_classes")
-                - model.wcr.huggingface_repo: HuggingFace repo ID
-                - model.wcr.base_ssl_path: Path to base_ssl.pt (relative to model dir)
-                - model.pretrained.cache_dir: Cache directory for models
+                - model.wcr.model_name: Subdirectory under cache_dir (e.g. "WCR_77_classes")
+                - model.wcr.base_ssl_path: Filename or path for base_ssl.pt
+                - model.pretrained.cache_dir: Base directory for local weights
             device: Device to load model on (optional)
         """
         super().__init__()
@@ -40,6 +38,8 @@ class WCREncoder(nn.Module):
         model_name = wcr_config.get("model_name", "wcr_77_classes")
         cache_dir = pretrained_config.get("cache_dir", "data/pretrained_weights/deepecg_sl")
         base_ssl_path = wcr_config.get("base_ssl_path", "base_ssl.pt")
+        # Basename only for paths under cache_dir/model_name (avoid join with wrongly expanded absolute path)
+        base_ssl_name = Path(base_ssl_path).name
         
         # Resolve cache directory path (relative to project root)
         cache_dir_path = Path(cache_dir)
@@ -47,7 +47,7 @@ class WCREncoder(nn.Module):
             # Try to find project root (go up from src/models/deepecg_sl/wcr_encoder.py)
             # wcr_encoder.py -> deepecg_sl -> models -> src -> MA-thesis-1 (project root)
             project_root = Path(__file__).parent.parent.parent.parent
-            cache_dir_path = project_root / cache_dir
+            cache_dir_path = (project_root / cache_dir).resolve()
         
         # Handle base_ssl_path - try absolute first, then relative to cache_dir
         base_ssl_path_obj = Path(base_ssl_path)
@@ -60,7 +60,7 @@ class WCREncoder(nn.Module):
                 base_ssl_direct = cache_dir_path / base_ssl_path_obj.name
         else:
             # Relative path, use it relative to cache_dir
-            base_ssl_direct = cache_dir_path / base_ssl_path
+            base_ssl_direct = cache_dir_path / base_ssl_name
         
         # Checkpoint is always relative to cache_dir
         checkpoint_direct = cache_dir_path / f"{model_name}.pt"
@@ -74,7 +74,7 @@ class WCREncoder(nn.Module):
         else:
             # Try old structure: cache_dir/model_name/
             model_dir_path = cache_dir_path / model_name
-            base_ssl_old = model_dir_path / base_ssl_path
+            base_ssl_old = model_dir_path / base_ssl_name
             
             if base_ssl_old.exists():
                 # Old structure found
@@ -87,25 +87,26 @@ class WCREncoder(nn.Module):
                         f"No checkpoint file found in {model_dir} (excluding base_ssl.pt)"
                     )
                 checkpoint_path = str(checkpoint_files[0])
-                base_ssl_full_path = str(base_ssl_old)
+                base_ssl_full_path = str(base_ssl_old.resolve())
             else:
-                # Try to download from HuggingFace (fallback)
-                print(f"Weights not found locally. Attempting download from HuggingFace...")
-                model_dir = HuggingFaceModelLoader.load_wcr_model(model_name, str(cache_dir_path))
-                model_dir = Path(model_dir)
-                # Find checkpoint file (any .pt file except base_ssl.pt)
-                checkpoint_files = [f for f in model_dir.glob("*.pt") if f.name != "base_ssl.pt"]
-                if not checkpoint_files:
-                    raise FileNotFoundError(
-                        f"No checkpoint file found in {model_dir} (excluding base_ssl.pt)"
-                    )
-                checkpoint_path = str(checkpoint_files[0])
-                base_ssl_full_path = str(model_dir / base_ssl_path)
+                flat_ckpt = cache_dir_path / f"{model_name}.pt"
+                subdir = cache_dir_path / model_name
+                raise FileNotFoundError(
+                    "WCR weights not found locally (no HuggingFace download). "
+                    "Expected either:\n"
+                    f"  1) {base_ssl_direct} and {flat_ckpt}, or\n"
+                    f"  2) {subdir / base_ssl_name} plus a second .pt checkpoint in {subdir}\n"
+                    f"(model.wcr.model_name={model_name!r}, cache_dir={cache_dir_path})"
+                )
         
         # Determine device
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         map_location = str(device)
+        
+        # Ensure absolute paths (fairseq resolves relative paths from cwd)
+        checkpoint_path = str(Path(checkpoint_path).resolve())
+        base_ssl_full_path = str(Path(base_ssl_full_path).resolve())
         
         # Load model using fairseq-signals
         print(f"Loading WCR checkpoint from: {checkpoint_path}")

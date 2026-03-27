@@ -80,6 +80,14 @@ def main():
     if icu_unit_config.get('enabled', False):
         icu_list = icu_unit_config.get('icu_unit_list', [])
         print(f"  ICU units: {len(icu_list)} + 1 (Other) = {len(icu_list) + 1} features")
+    sofa_cfg = config.get("data", {}).get("sofa_features", {})
+    if sofa_cfg.get("enabled", False):
+        print(
+            f"SOFA features: Enabled (columns={sofa_cfg.get('columns', ['sofa_total'])}, "
+            f"filter_to_valid_sofa={sofa_cfg.get('filter_to_valid_sofa', True)})"
+        )
+    else:
+        print("SOFA features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

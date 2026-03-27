@@ -8,38 +8,43 @@ import os
 from pathlib import Path
 
 # =============================================================================
-# PFADE ZU MIMIC-IV DATEN (HIER ANPASSEN!)
+# PFADE ZU MIMIC-IV DATEN
 # =============================================================================
+# Projekt-Root → data/labeling/:
+#   - labels_csv/: icustays, patients, admissions (wie im Training)
+#   - mimic-iv/<tabelle>.csv/<tabelle>.csv: große ICU/Hosp-Tabellen (unkomprimiert)
 
-# =============================================================================
-# DATEN-PFADE (auf externer SSD)
-# =============================================================================
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_LABELING_DIR = _PROJECT_ROOT / "data" / "labeling"
+_LABELS_CSV = _LABELING_DIR / "labels_csv"
+_MIMIC_IV_DIR = _LABELING_DIR / "mimic-iv"
 
-# Basis-Pfad zu allen PhysioNet Files
-PHYSIONET_BASE_PATH = r"D:\MA\physionet.org\files"
 
-# MIMIC-IV Clinical Data (Labels, ICU Stays, Vitals, Labs, etc.)
-MIMIC_IV_BASE_PATH = r"D:\MA\physionet.org\files\mimic-iv\3.1"
+def _mimic_iv_table_csv(name: str) -> str:
+    """Pfad zu mimic-iv/<name>.csv/<name>.csv (PhysioNet-Entpack-Layout)."""
+    return str(_MIMIC_IV_DIR / f"{name}.csv" / f"{name}.csv")
 
-# MIMIC-IV-ECG (ECG Waveforms)
-MIMIC_IV_ECG_PATH = r"D:\MA\physionet.org\files\mimic-iv-ecg\1.0"
 
-# Spezifische Tabellen-Pfade (alle als .csv.gz komprimiert!)
+# Basis für Dokumentation / Overrides (SOFA nutzt primär MIMIC_IV_PATHS)
+PHYSIONET_BASE_PATH = str(_LABELING_DIR)
+
+# Logischer MIMIC-IV-Ordner (große Tabellen)
+MIMIC_IV_BASE_PATH = str(_MIMIC_IV_DIR)
+
+# ECG-Waveforms: falls woanders, hier manuell setzen (wird von SOFA-Loader nicht genutzt)
+MIMIC_IV_ECG_PATH = str(_LABELING_DIR)
+
+# Konkrete Tabellen (unkomprimierte .csv wie im Repo unter data/labeling/)
 MIMIC_IV_PATHS = {
-    # ICU Daten
-    "icustays": os.path.join(MIMIC_IV_BASE_PATH, "icu", "icustays.csv.gz"),
-    "chartevents": os.path.join(MIMIC_IV_BASE_PATH, "icu", "chartevents.csv.gz"),      # 3.3 GB!
-    "inputevents": os.path.join(MIMIC_IV_BASE_PATH, "icu", "inputevents.csv.gz"),
-    "outputevents": os.path.join(MIMIC_IV_BASE_PATH, "icu", "outputevents.csv.gz"),
-    "d_items": os.path.join(MIMIC_IV_BASE_PATH, "icu", "d_items.csv.gz"),
-    
-    # Hospital Daten (Labs)
-    "labevents": os.path.join(MIMIC_IV_BASE_PATH, "hosp", "labevents.csv.gz"),         # 2.5 GB!
-    "d_labitems": os.path.join(MIMIC_IV_BASE_PATH, "hosp", "d_labitems.csv.gz"),
-    
-    # Core Daten
-    "patients": os.path.join(MIMIC_IV_BASE_PATH, "hosp", "patients.csv.gz"),
-    "admissions": os.path.join(MIMIC_IV_BASE_PATH, "hosp", "admissions.csv.gz"),
+    "icustays": str(_LABELS_CSV / "icustays.csv"),
+    "chartevents": _mimic_iv_table_csv("chartevents"),
+    "inputevents": _mimic_iv_table_csv("inputevents"),
+    "outputevents": _mimic_iv_table_csv("outputevents"),
+    "d_items": _mimic_iv_table_csv("d_items"),
+    "labevents": _mimic_iv_table_csv("labevents"),
+    "d_labitems": _mimic_iv_table_csv("d_labitems"),
+    "patients": str(_LABELS_CSV / "patients.csv"),
+    "admissions": str(_LABELS_CSV / "admissions.csv"),
 }
 
 # =============================================================================
@@ -125,7 +130,7 @@ def validate_paths():
     """Validiert, ob alle benötigten MIMIC-IV Pfade existieren."""
     if MIMIC_IV_BASE_PATH == "PFAD/ZU/MIMIC-IV":
         print("\n⚠️  WARNUNG: MIMIC_IV_BASE_PATH noch nicht gesetzt!")
-        print("   → Bitte setze den Pfad in src/baseline_models/config.py\n")
+        print("   → Bitte setze die Pfade in src/scoring_models/config.py\n")
         return False
     
     missing = []
@@ -144,8 +149,7 @@ def validate_paths():
 
 def get_project_root():
     """Gibt das Projekt-Root-Verzeichnis zurück."""
-    # Von src/baseline_models/ zwei Ebenen hoch
-    return Path(__file__).parent.parent.parent
+    return _PROJECT_ROOT
 
 # =============================================================================
 # EXPORT

@@ -148,9 +148,16 @@ class HuBERTEncoder(nn.Module):
             del self.hubert_model.final_proj
         if hasattr(self.hubert_model, 'label_embedding'):
             del self.hubert_model.label_embedding
-        
+
         # Move to device
         self.hubert_model = self.hubert_model.to(device)
+
+        if hubert_config.get("gradient_checkpointing", False) and hasattr(
+            self.hubert_model, "gradient_checkpointing_enable"
+        ):
+            self.hubert_model.gradient_checkpointing_enable()
+            print("HuBERT gradient checkpointing enabled (lower VRAM, slower steps)")
+
         self.hubert_model.eval()  # Set to eval mode initially
         
         print(f"HuBERT Encoder loaded on {device}")
@@ -273,7 +280,17 @@ class HuBERTEncoder(nn.Module):
         self.hubert_model.eval()
     
     def unfreeze(self) -> None:
-        """Unfreeze encoder parameters (enable gradient updates)."""
+        """Unfreeze encoder parameters (enable gradient updates).
+        The Convolutional Feature Extractor (Conv layers) remains frozen, 
+        as recommended in the original paper (unfreeze_conv_embedder=False).
+        """
+        # 1. Unfreeze the entire model (Transformer layers etc.)
         for param in self.hubert_model.parameters():
             param.requires_grad = True
+            
+        # 2. Explicitly freeze the Feature Extractor again
+        if hasattr(self.hubert_model, 'feature_extractor'):
+            for param in self.hubert_model.feature_extractor.parameters():
+                param.requires_grad = False
+                
         self.hubert_model.train()
