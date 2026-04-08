@@ -44,7 +44,6 @@ from src.models import (
     HybridCNNLSTM,
     DeepECG_SL,
     LSTM1D,
-    XResNetPTBXL,
 )
 from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
 from src.data.ecg import create_dataloaders
@@ -64,7 +63,6 @@ _MODEL_REGISTRY = {
     "HybridCNNLSTM": HybridCNNLSTM,
     "CNNScratch": CNNScratch,
     "DeepECG_SL": DeepECG_SL,
-    "XResNetPTBXL": XResNetPTBXL,
 }
 
 

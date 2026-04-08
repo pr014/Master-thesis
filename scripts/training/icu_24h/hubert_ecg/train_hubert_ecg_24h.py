@@ -20,6 +20,8 @@ Resume after timeout (checkpoints from ModelCheckpoint: HuBERT_ECG_best_<JOBID>.
 Optional env: RESUME_PHASE1, RESUME_PHASE2, PHASE1_WEIGHTS, SKIP_PHASE1=1
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import argparse
 import sys
@@ -378,6 +380,22 @@ def main():
     
     diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
     print(f"Diagnosis features: {'Enabled' if diagnosis_config.get('enabled', False) else 'Disabled'}")
+
+    icu_unit_config = config.get('data', {}).get('icu_unit_features', {})
+    if icu_unit_config.get('enabled', False):
+        icu_list = icu_unit_config.get('icu_unit_list', [])
+        print(f"ICU unit features: Enabled ({len(icu_list)} + 1 Other)")
+    else:
+        print("ICU unit features: Disabled")
+
+    sofa_cfg = config.get('data', {}).get('sofa_features', {})
+    if sofa_cfg.get('enabled', False):
+        print(
+            f"SOFA features: Enabled (columns={sofa_cfg.get('columns', ['sofa_total'])}, "
+            f"filter_to_valid_sofa={sofa_cfg.get('filter_to_valid_sofa', True)})"
+        )
+    else:
+        print("SOFA features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

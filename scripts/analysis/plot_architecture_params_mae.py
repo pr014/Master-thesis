@@ -33,7 +33,6 @@ MODEL_ORDER = [
     "LSTM Uni",
     "LSTM Bi",
     "Hybrid CNN-LSTM",
-    "XResNet PTB-XL",
     "DeepECG-SL",
     "HuBERT-ECG",
 ]
@@ -45,7 +44,6 @@ MODEL_TYPE_TO_NAME = {
     "LSTM1D_Unidirectional": "LSTM Uni",
     "LSTM1D_Bidirectional": "LSTM Bi",
     "HybridCNNLSTM": "Hybrid CNN-LSTM",
-    "XResNetPTBXL": "XResNet PTB-XL",
     "DeepECG_SL": "DeepECG-SL",
     "HuBERT_ECG": "HuBERT-ECG",
     "HuBERT-ECG": "HuBERT-ECG",
@@ -77,8 +75,6 @@ def _extract_model_type(text: str, log_path: Path) -> str | None:
             return "LSTM Bi"
         if "hybrid_cnn_lstm" in path:
             return "Hybrid CNN-LSTM"
-        if "xresnet1d_ptbxl" in path:
-            return "XResNet PTB-XL"
         if "deepecg_sl" in path:
             return "DeepECG-SL"
         if "hubert" in path.lower():
@@ -95,8 +91,6 @@ def _extract_model_type(text: str, log_path: Path) -> str | None:
         return "LSTM Bi"
     if "Training Hybrid CNN-LSTM" in text or "Hybrid CNN-LSTM" in text:
         return "Hybrid CNN-LSTM"
-    if "Training XResNet1D-101" in text or "XResNet" in text or "PTB-XL" in text:
-        return "XResNet PTB-XL"
     if "Training DeepECG-SL" in text or "DeepECG-SL" in text:
         return "DeepECG-SL"
     if "HuBERT" in text or "HuBERT-ECG" in text:
@@ -149,7 +143,6 @@ def get_parameter_counts() -> dict[str, int]:
         "LSTM Uni": 233_000,
         "LSTM Bi": 596_000,
         "Hybrid CNN-LSTM": 900_000,
-        "XResNet PTB-XL": 1_881_192,
         "DeepECG-SL": 100_000_000,
         "HuBERT-ECG": 93_000_000,
     }

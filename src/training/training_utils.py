@@ -9,7 +9,12 @@ import numpy as np
 
 from ..data.ecg import create_dataloaders
 from ..data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
-from .train_loop import evaluate_with_detailed_metrics
+from .losses import MultiTaskLoss
+from .train_loop import (
+    evaluate_with_detailed_metrics,
+    find_best_mortality_threshold_f1,
+    _is_multi_task_model,
+)
 
 
 def setup_icustays_mapper(config: Dict[str, Any]) -> ICUStayMapper:
@@ -133,7 +138,31 @@ def evaluate_and_print_results(
             "No job_id available. Cannot load checkpoint without job_id for traceability. "
             "Ensure SLURM_JOB_ID environment variable is set."
         )
-    
+
+    # Mortality: choose threshold on validation (max F1, stay-level); apply same threshold on test.
+    mortality_thr = 0.5
+    is_multi_task = isinstance(trainer.criterion, MultiTaskLoss) or _is_multi_task_model(
+        trainer.model
+    )
+    if is_multi_task and trainer.val_loader is not None:
+        val_out = evaluate_with_detailed_metrics(
+            model=trainer.model,
+            val_loader=trainer.val_loader,
+            criterion=trainer.criterion,
+            device=trainer.device,
+            config=trainer.config,
+            mortality_threshold=0.5,
+            return_mortality_arrays=True,
+        )
+        probs = val_out.get("mortality_probs_stay")
+        labs = val_out.get("mortality_labels_stay")
+        if probs is not None and labs is not None and len(probs) > 0:
+            mortality_thr = find_best_mortality_threshold_f1(probs, labs)
+            print(
+                f"\nMortality decision threshold (validation, max F1, stay-level): "
+                f"{mortality_thr:.4f}"
+            )
+
     # Evaluate on test set with detailed metrics
     test_metrics = evaluate_with_detailed_metrics(
         model=trainer.model,
@@ -141,6 +170,8 @@ def evaluate_and_print_results(
         criterion=trainer.criterion,
         device=trainer.device,
         config=trainer.config,
+        mortality_threshold=mortality_thr,
+        return_mortality_arrays=False,
     )
     
     # Print formatted test results summary
@@ -197,6 +228,10 @@ def evaluate_and_print_results(
     # Mortality summary (multi-task)
     if "mortality_auc" in test_metrics:
         print("\n🔹 Mortality (Binary Classification):")
+        print(
+            f"   Threshold: {test_metrics.get('mortality_threshold_used', mortality_thr):.4f} "
+            f"(Val max F1, applied to test)"
+        )
         print(f"   Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
         print(f"   Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
         print(f"   Recall:    {test_metrics.get('mortality_recall', 0.0):.4f}")
@@ -236,5 +271,8 @@ def evaluate_and_print_results(
         history["test_mortality_precision"] = test_metrics.get("mortality_precision", 0.0)
         history["test_mortality_recall"] = test_metrics.get("mortality_recall", 0.0)
         history["test_mortality_f1"] = test_metrics.get("mortality_f1", 0.0)
+        history["test_mortality_threshold"] = float(
+            test_metrics.get("mortality_threshold_used", mortality_thr)
+        )
     
     return history

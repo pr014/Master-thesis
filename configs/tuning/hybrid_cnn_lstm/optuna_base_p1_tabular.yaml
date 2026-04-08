@@ -1,0 +1,25 @@
+# Optuna tuning base override for Hybrid CNN-LSTM (merged on top of configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml).
+# P1 dataset; late-fusion tabular features ON (paths, ICU list, SOFA settings come from the model YAML via recursive merge).
+# Augmentation: gaussian noise, lead dropout, baseline wander; strengths tuned in the worker.
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+
+  demographic_features:
+    enabled: true
+
+  diagnosis_features:
+    enabled: false
+
+  icu_unit_features:
+    enabled: true
+
+  sofa_features:
+    enabled: true
+
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    lead_dropout: true
+    baseline_wander: true
+    amplitude_scaling: false

@@ -40,6 +40,36 @@ def _is_multi_task_model(model: nn.Module) -> bool:
         return False
 
 
+def find_best_mortality_threshold_f1(probs: np.ndarray, labels: np.ndarray) -> float:
+    """Pick threshold in [0.05, 0.95] that maximizes F1 on validation (stay-level scores).
+
+    AUC is unchanged by threshold; this only sets the operating point for hard classification.
+    """
+    if probs.size == 0 or labels.size == 0:
+        return 0.5
+    labels_i = labels.astype(np.int64)
+    if len(np.unique(labels_i)) < 2:
+        return 0.5
+    best_thr = 0.5
+    best_f1 = -1.0
+    for thr in np.arange(0.05, 0.951, 0.01):
+        preds = (probs >= thr).astype(np.int64)
+        tp = int(((preds == 1) & (labels_i == 1)).sum())
+        fp = int(((preds == 1) & (labels_i == 0)).sum())
+        fn = int(((preds == 0) & (labels_i == 1)).sum())
+        precision = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+        recall = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        f1 = (
+            float(2.0 * precision * recall / (precision + recall))
+            if (precision + recall) > 0
+            else 0.0
+        )
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thr = float(thr)
+    return best_thr
+
+
 def _compute_regression_metrics(predictions: np.ndarray, targets: np.ndarray) -> Dict[str, float]:
     """Compute regression metrics.
     
@@ -530,6 +560,8 @@ def evaluate_with_detailed_metrics(
     criterion: nn.Module,
     device: torch.device,
     config: Optional[Dict[str, Any]] = None,
+    mortality_threshold: float = 0.5,
+    return_mortality_arrays: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate model with detailed regression metrics.
     
@@ -549,6 +581,9 @@ def evaluate_with_detailed_metrics(
         val_loader: Data loader.
         criterion: Loss function (can be MultiTaskLoss for multi-task).
         device: Device to evaluate on.
+        mortality_threshold: Score threshold for binary mortality (pred positive if prob >= threshold).
+        return_mortality_arrays: If True and multi-task, include stay-level ``mortality_probs_stay``
+            and ``mortality_labels_stay`` for threshold tuning on validation.
     
     Returns:
         Dictionary with detailed metrics including:
@@ -829,7 +864,7 @@ def evaluate_with_detailed_metrics(
                 mortality_labels_valid = mortality_labels_np[valid_mortality_mask]
                 
                 # Overall mortality metrics
-                mortality_preds = (mortality_probs_valid > 0.5).astype(int)
+                mortality_preds = (mortality_probs_valid >= mortality_threshold).astype(int)
                 mortality_accuracy = (mortality_preds == mortality_labels_valid).mean()
                 mortality_precision = precision_score(mortality_labels_valid, mortality_preds, zero_division=0)
                 mortality_recall = recall_score(mortality_labels_valid, mortality_preds, zero_division=0)
@@ -849,6 +884,14 @@ def evaluate_with_detailed_metrics(
                     "mortality_recall": float(mortality_recall),
                     "mortality_f1": float(mortality_f1),
                     "mortality_auc": float(mortality_auc),
+                    "mortality_threshold_used": float(mortality_threshold),
                 })
+                if return_mortality_arrays:
+                    result["mortality_probs_stay"] = np.asarray(
+                        mortality_probs_valid, dtype=np.float64
+                    ).copy()
+                    result["mortality_labels_stay"] = np.asarray(
+                        mortality_labels_valid, dtype=np.float64
+                    ).copy()
     
     return result

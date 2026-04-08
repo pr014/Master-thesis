@@ -6,6 +6,25 @@ import torch.nn as nn
 import numpy as np
 
 
+def _time_segment_swap_time_first(ecg: np.ndarray, segment_order: np.ndarray) -> np.ndarray:
+    """Shuffle fixed-length time segments along axis 0 (time, channels).
+
+    Matches ``ecgmentations.augmentations.time.functional.time_segment_swap`` (MIT).
+    ``ecg`` must be (T, C); ``segment_order`` is a permutation of ``0..num_segments-1``.
+    """
+    shape = ecg.shape
+    length = shape[0]
+    time_point_order = np.arange(length)
+    num_segments = len(segment_order)
+    time_point_order = np.array(np.array_split(time_point_order, num_segments))[segment_order]
+    out = ecg[time_point_order]
+    if len(shape) == 2:
+        out = out.reshape(length, -1)
+    else:
+        out = out.reshape(length)
+    return np.ascontiguousarray(out)
+
+
 class GaussianNoise(nn.Module):
     """Add Gaussian noise to ECG signal.
     
@@ -264,6 +283,54 @@ class LeadDropout(nn.Module):
         return result
 
 
+class TimeSegmentShuffle(nn.Module):
+    """Randomly permute contiguous segments along time (ecgmentations-style).
+
+    API mirrors ``ecgmentations.augmentations.time.transformations.TimeSegmentShuffle``
+    (``num_segments``, per-step probability ``p``). Expects PyTorch layout ``(C, T)`` or
+    ``(B, C, T)``; converts to ``(T, C)`` for the swap, then converts back.
+    """
+
+    def __init__(self, num_segments: int = 5, p: float = 0.5):
+        super().__init__()
+        if num_segments < 2:
+            raise ValueError("num_segments must be >= 2 for TimeSegmentShuffle")
+        if not 0.0 <= p <= 1.0:
+            raise ValueError("p must be in [0, 1]")
+        self.num_segments = num_segments
+        self.p = p
+
+    def forward(self, signal: torch.Tensor) -> torch.Tensor:
+        if not self.training:
+            return signal
+        if torch.isnan(signal).any() or torch.isinf(signal).any():
+            return signal
+
+        if signal.dim() == 2:
+            return self._forward_single(signal)
+        if signal.dim() == 3:
+            parts = [self._forward_single(signal[i]) for i in range(signal.shape[0])]
+            return torch.stack(parts, dim=0)
+        return signal
+
+    def _forward_single(self, signal: torch.Tensor) -> torch.Tensor:
+        if torch.rand((), device=signal.device) > self.p:
+            return signal
+
+        _, length = signal.shape
+        n_seg = min(self.num_segments, length)
+        if n_seg < 2:
+            return signal
+
+        arr = signal.detach().cpu().numpy()
+        tc = np.ascontiguousarray(np.moveaxis(arr, 0, 1))
+        order = np.arange(n_seg)
+        np.random.shuffle(order)
+        out_tc = _time_segment_swap_time_first(tc.astype(np.float32, copy=True), order)
+        out = torch.from_numpy(out_tc).to(device=signal.device, dtype=signal.dtype)
+        return out.permute(1, 0).contiguous()
+
+
 class ECGAugmentation(nn.Module):
     """Composable ECG augmentation transform.
     
@@ -291,6 +358,9 @@ class ECGAugmentation(nn.Module):
         lead_dropout: bool = False,
         lead_dropout_prob: float = 0.1,
         sampling_rate: float = 500.0,
+        time_segment_shuffle: bool = False,
+        time_segment_shuffle_num_segments: int = 5,
+        time_segment_shuffle_p: float = 0.5,
     ):
         """Initialize ECG augmentation.
         
@@ -308,6 +378,9 @@ class ECGAugmentation(nn.Module):
             lead_dropout: Enable lead dropout augmentation.
             lead_dropout_prob: Probability of zeroing out each individual lead.
             sampling_rate: ECG sampling rate (Hz).
+            time_segment_shuffle: Enable time-segment shuffle (ecgmentations-style).
+            time_segment_shuffle_num_segments: Number of segments along time (>= 2).
+            time_segment_shuffle_p: Probability to apply shuffle when enabled (training only).
         """
         super().__init__()
         
@@ -330,6 +403,14 @@ class ECGAugmentation(nn.Module):
 
         if lead_dropout:
             self.transforms.append(LeadDropout(dropout_prob=lead_dropout_prob))
+
+        if time_segment_shuffle:
+            self.transforms.append(
+                TimeSegmentShuffle(
+                    num_segments=time_segment_shuffle_num_segments,
+                    p=time_segment_shuffle_p,
+                )
+            )
     
     def forward(self, signal: torch.Tensor) -> torch.Tensor:
         """Apply augmentations sequentially.
@@ -377,5 +458,8 @@ def create_augmentation_transform(config: Dict[str, Any]) -> Optional[Callable]:
         lead_dropout=aug_config.get("lead_dropout", False),
         lead_dropout_prob=aug_config.get("lead_dropout_prob", 0.1),
         sampling_rate=config.get("data", {}).get("sampling_rate", 500.0),
+        time_segment_shuffle=aug_config.get("time_segment_shuffle", False),
+        time_segment_shuffle_num_segments=aug_config.get("time_segment_shuffle_num_segments", 5),
+        time_segment_shuffle_p=aug_config.get("time_segment_shuffle_p", 0.5),
     )
 

@@ -7,16 +7,44 @@ Supports LOS REGRESSION task with metrics: MAE, RMSE, R², Median AE, Percentile
 Usage:
   python scripts/analysis/parse_training_results.py --job 3010998
   python scripts/analysis/parse_training_results.py --log outputs/logs/slurm_3010998.out
+
+For --job, looks under outputs/logs/ for slurm_<id>.out first, then Optuna worker logs
+(e.g. slurm_optuna_hybrid_<id>.out, slurm_optuna_deepecg_<id>.out), then any slurm_*_<id>.out.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import glob
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+
+def _resolve_slurm_log_path(job_id: int, logs_dir: Optional[Path] = None) -> Optional[Path]:
+    """Resolve SLURM stdout .out path for a job id (plain training vs Optuna / other sbatch prefixes)."""
+    base = Path("outputs/logs") if logs_dir is None else logs_dir
+    candidates = [
+        base / f"slurm_{job_id}.out",
+        base / f"slurm_optuna_hybrid_{job_id}.out",
+        base / f"slurm_optuna_deepecg_{job_id}.out",
+        base / f"slurm_balanced_mortality_cnn_{job_id}.out",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    matches = sorted(base.glob(f"slurm_*_{job_id}.out"))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        for path in matches:
+            if "optuna" in path.name:
+                return path
+        return matches[0]
+    return None
 
 
 _RE_FLOAT = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -54,7 +82,7 @@ def _extract_job_id(text: str) -> Optional[int]:
 
 
 def _extract_best_val_loss(text: str) -> Optional[float]:
-    m = re.search(r"\bBest validation loss:\s*(%s)\b" % _RE_FLOAT, text)
+    m = re.search(r"\bBest validation loss:\s*(%s)\b" % _RE_FLOAT, text, re.IGNORECASE)
     return float(m.group(1)) if m else None
 
 
@@ -390,12 +418,199 @@ def parse_log_text(text: str) -> ParsedResults:
     )
 
 
+def _flatten_prefixed_metrics(metrics: Dict[str, float], prefix: str = "") -> Dict[str, float]:
+    """Return a shallow dict copy with an optional key prefix."""
+    if not prefix:
+        return dict(metrics)
+    return {f"{prefix}{key}": value for key, value in metrics.items()}
+
+
+def _parsed_results_to_row(parsed: ParsedResults) -> Dict[str, object]:
+    """Flatten ParsedResults into a single CSV-friendly row."""
+    row: Dict[str, object] = {
+        "job_id": parsed.job_id if parsed.job_id is not None else "",
+        "best_val_loss": parsed.best_val_loss if parsed.best_val_loss is not None else "",
+        "best_val_mae": parsed.best_val_mae if parsed.best_val_mae is not None else "",
+        "best_val_r2": parsed.best_val_r2 if parsed.best_val_r2 is not None else "",
+        "num_stays_evaluated": parsed.num_stays_evaluated if parsed.num_stays_evaluated is not None else "",
+    }
+    row.update(_flatten_prefixed_metrics(parsed.train_metrics))
+    row.update(_flatten_prefixed_metrics(parsed.val_metrics))
+    row.update(_flatten_prefixed_metrics(parsed.test_metrics))
+    return row
+
+
+def _load_manifest_rows(csv_path: Path) -> List[Dict[str, str]]:
+    """Load rows from a tuning manifest CSV."""
+    with open(csv_path, newline="", encoding="utf-8", errors="replace") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader)
+
+
+def _resolve_batch_specs(
+    jobs_csv: Optional[Path],
+    logs_glob: Optional[str],
+) -> List[tuple[Optional[Path], Dict[str, str]]]:
+    """Resolve batch inputs to a list of (log_path, manifest_row)."""
+    specs: List[tuple[Optional[Path], Dict[str, str]]] = []
+
+    if jobs_csv is not None:
+        for row in _load_manifest_rows(jobs_csv):
+            log_path_s = (row.get("log_path") or row.get("slurm_log_path") or "").strip()
+            job_id_s = (row.get("job_id") or "").strip()
+            if log_path_s:
+                specs.append((Path(log_path_s), row))
+            elif job_id_s.isdigit():
+                jid = int(job_id_s)
+                resolved = _resolve_slurm_log_path(jid)
+                specs.append(
+                    (resolved if resolved is not None else Path("outputs/logs") / f"slurm_{jid}.out", row)
+                )
+            else:
+                specs.append((None, row))
+        return specs
+
+    if logs_glob is None:
+        return specs
+
+    for log_path_str in sorted(glob.glob(logs_glob)):
+        specs.append((Path(log_path_str), {}))
+    return specs
+
+
+def _collect_batch_rows(
+    jobs_csv: Optional[Path],
+    logs_glob: Optional[str],
+) -> List[Dict[str, object]]:
+    """Parse multiple logs and join them with an optional manifest."""
+    rows: List[Dict[str, object]] = []
+    for log_path, manifest_row in _resolve_batch_specs(jobs_csv, logs_glob):
+        row: Dict[str, object] = dict(manifest_row)
+        row.setdefault("job_id", row.get("job_id", ""))
+
+        if log_path is None:
+            row["parse_status"] = "no_job_id"
+            rows.append(row)
+            continue
+
+        row["log_path"] = str(log_path)
+        if not log_path.exists():
+            row["parse_status"] = "log_missing"
+            rows.append(row)
+            continue
+
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_log_text(text)
+        row.update(_parsed_results_to_row(parsed))
+        row["parse_status"] = "parsed"
+        rows.append(row)
+
+    return rows
+
+
+def _write_batch_csv(rows: List[Dict[str, object]], output_path: Path) -> None:
+    """Write flattened batch rows to CSV."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: List[str] = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+    with open(output_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _print_batch_summary(rows: List[Dict[str, object]]) -> None:
+    """Print a small leaderboard from parsed batch rows."""
+    parsed_rows = [row for row in rows if row.get("parse_status") == "parsed"]
+    print(f"parsed_rows: {len(parsed_rows)} / total_rows: {len(rows)}")
+
+    ranked_rows = []
+    for row in parsed_rows:
+        best_val_mae = row.get("best_val_mae")
+        if best_val_mae in ("", None):
+            continue
+        try:
+            mae_value = float(best_val_mae)
+        except (TypeError, ValueError):
+            continue
+        ranked_rows.append((mae_value, row))
+
+    if not ranked_rows:
+        print("No parsed rows with best_val_mae available for ranking.")
+        return
+
+    ranked_rows.sort(key=lambda item: item[0])
+    print("\nTop trials by best_val_mae:")
+    for rank, (mae_value, row) in enumerate(ranked_rows[:10], start=1):
+        trial_id = row.get("trial_id", "")
+        job_id = row.get("job_id", "")
+        r2_value = row.get("best_val_r2", "")
+        test_mae = row.get("test_los_mae", "")
+        print(
+            f"  {rank:2}. trial={trial_id or '-':>10} "
+            f"job={str(job_id) or '-':>8} "
+            f"best_val_mae={mae_value:.4f} "
+            f"best_val_r2={r2_value if r2_value != '' else 'N/A'} "
+            f"test_los_mae={test_mae if test_mae != '' else 'N/A'}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Parse training results from SLURM log (LOS REGRESSION).")
-    parser.add_argument("--job", type=int, default=None, help="SLURM job id (uses outputs/logs/slurm_<job>.out)")
+    parser.add_argument(
+        "--job",
+        type=int,
+        default=None,
+        help="SLURM job id; resolves outputs/logs/slurm_<job>.out or e.g. slurm_optuna_hybrid_<job>.out",
+    )
     parser.add_argument("--log", type=str, default=None, help="Path to slurm .out log file")
+    parser.add_argument(
+        "--jobs-csv",
+        type=str,
+        default=None,
+        help="Optional tuning manifest CSV. Parses all listed jobs and joins metrics back onto the manifest.",
+    )
+    parser.add_argument(
+        "--logs-glob",
+        type=str,
+        default=None,
+        help="Optional glob for batch parsing, e.g. outputs/logs/slurm_*.out.",
+    )
+    parser.add_argument(
+        "--out-csv",
+        type=str,
+        default=None,
+        help="Optional output CSV for batch mode. Defaults to results.csv next to --jobs-csv.",
+    )
     parser.add_argument("--json", action="store_true", help="Print full JSON output")
     args = parser.parse_args()
+
+    batch_mode = args.jobs_csv is not None or args.logs_glob is not None
+
+    if batch_mode:
+        jobs_csv = Path(args.jobs_csv) if args.jobs_csv else None
+        out_csv = Path(args.out_csv) if args.out_csv else None
+        if out_csv is None and jobs_csv is not None:
+            out_csv = jobs_csv.with_name("results.csv")
+        elif out_csv is None:
+            out_csv = Path("outputs/logs/parsed_results.csv")
+
+        rows = _collect_batch_rows(jobs_csv=jobs_csv, logs_glob=args.logs_glob)
+        if not rows:
+            raise SystemExit("No rows resolved for batch parsing.")
+
+        _write_batch_csv(rows, out_csv)
+        print(f"Wrote batch results CSV: {out_csv}")
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True))
+        else:
+            _print_batch_summary(rows)
+        return
 
     if not args.log and not args.job:
         raise SystemExit("Provide --job <id> or --log <path>")
@@ -403,7 +618,15 @@ def main() -> None:
     if args.log:
         log_path = Path(args.log)
     else:
-        log_path = Path("outputs/logs") / f"slurm_{args.job}.out"
+        assert args.job is not None
+        log_path = _resolve_slurm_log_path(args.job)
+        if log_path is None:
+            raise SystemExit(
+                f"Log file not found for job {args.job} under outputs/logs/. "
+                f"Tried slurm_{args.job}.out, slurm_optuna_hybrid_{args.job}.out, "
+                f"slurm_optuna_deepecg_{args.job}.out, slurm_balanced_mortality_cnn_{args.job}.out, "
+                f"and slurm_*_{args.job}.out — use --log <path> if the log lives elsewhere."
+            )
 
     if not log_path.exists():
         raise SystemExit(f"Log file not found: {log_path}")

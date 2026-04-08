@@ -67,7 +67,19 @@ class HuBERT_ECG(BaseECGModel):
         self.use_diagnoses = diagnosis_config.get("enabled", False)
         diagnosis_list = diagnosis_config.get("diagnosis_list", [])
         diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
-        
+
+        icu_unit_config = data_config.get("icu_unit_features", {})
+        self.use_icu_units = icu_unit_config.get("enabled", False)
+        icu_unit_list = icu_unit_config.get("icu_unit_list", [])
+        self.icu_unit_dim = len(icu_unit_list) if self.use_icu_units else 0
+
+        sofa_config = data_config.get("sofa_features", {})
+        self.use_sofa = sofa_config.get("enabled", False)
+        sofa_columns = sofa_config.get("columns", ["sofa_total"])
+        if isinstance(sofa_columns, str):
+            sofa_columns = [sofa_columns]
+        self.sofa_dim = len(sofa_columns) if self.use_sofa else 0
+
         # Determine device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._device = device
@@ -83,7 +95,11 @@ class HuBERT_ECG(BaseECGModel):
             fused_feature_dim += demo_dim
         if self.use_diagnoses:
             fused_feature_dim += diagnosis_dim
-        
+        if self.use_icu_units:
+            fused_feature_dim += self.icu_unit_dim
+        if self.use_sofa:
+            fused_feature_dim += self.sofa_dim
+
         # Classifier dropout (following HuBERTForECGClassification)
         self.classifier_dropout = nn.Dropout(dropout_rate)
         
@@ -118,6 +134,8 @@ class HuBERT_ECG(BaseECGModel):
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads.
         
@@ -125,31 +143,51 @@ class HuBERT_ECG(BaseECGModel):
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
-            
+            icu_unit_features: Optional ICU one-hot of shape (B, icu_unit_dim)
+            sofa_features: Optional SOFA vector of shape (B, sofa_dim)
+
         Returns:
             Features tensor of shape (B, fused_feature_dim)
         """
-        # HuBERT Encoder: (B, 12, 5000) -> (B, 768) with mean pooling
-        x = self.hubert_encoder(x)  # (B, 768)
-        
-        # Late fusion with demographics and diagnoses (optional)
+        # HuBERT Encoder: (B, 12, 5000) -> (B, hidden_size) with mean pooling
+        x = self.hubert_encoder(x)
+
+        # Late fusion (order aligned with Hybrid/DeepECG)
         if self.use_demographics and demographic_features is not None:
             demographic_features = demographic_features.to(x.device)
             x = torch.cat([x, demographic_features], dim=1)
         if self.use_diagnoses and diagnosis_features is not None:
             diagnosis_features = diagnosis_features.to(x.device)
             x = torch.cat([x, diagnosis_features], dim=1)
-        
+        if self.use_icu_units:
+            if icu_unit_features is None:
+                icu_unit_features = torch.zeros(
+                    x.shape[0], self.icu_unit_dim, device=x.device, dtype=x.dtype
+                )
+            else:
+                icu_unit_features = icu_unit_features.to(x.device)
+            x = torch.cat([x, icu_unit_features], dim=1)
+        if self.use_sofa:
+            if sofa_features is None:
+                sofa_features = torch.zeros(
+                    x.shape[0], self.sofa_dim, device=x.device, dtype=x.dtype
+                )
+            else:
+                sofa_features = sofa_features.to(x.device)
+            x = torch.cat([x, sofa_features], dim=1)
+
         # Classifier dropout (following HuBERTForECGClassification line 117)
         x = self.classifier_dropout(x)
-        
-        return x  # (B, fused_feature_dim)
+
+        return x
     
     def forward(
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
+        icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Forward pass returning LOS prediction and mortality probabilities.
         
@@ -157,7 +195,9 @@ class HuBERT_ECG(BaseECGModel):
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
-            
+            icu_unit_features: Optional ICU unit one-hot
+            sofa_features: Optional SOFA features
+
         Returns:
             Dictionary with:
                 - 'los': LOS regression output of shape (B, 1) - continuous LOS in days
@@ -167,7 +207,9 @@ class HuBERT_ECG(BaseECGModel):
         features = self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features
+            diagnosis_features=diagnosis_features,
+            icu_unit_features=icu_unit_features,
+            sofa_features=sofa_features,
         )
         
         # Task-specific heads (simple linear without activation for regression)
@@ -186,20 +228,13 @@ class HuBERT_ECG(BaseECGModel):
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Extract features before task heads (for MultiTaskECGModel compatibility).
-        
-        Args:
-            x: ECG input tensor of shape (B, 12, 5000)
-            demographic_features: Optional demographic features
-            diagnosis_features: Optional diagnosis features
-            icu_unit_features: Optional ICU unit features (accepted for API compatibility, not used)
-            
-        Returns:
-            Features tensor of shape (B, fused_feature_dim)
-        """
+        """Extract features before task heads (for MultiTaskECGModel compatibility)."""
         return self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features
+            diagnosis_features=diagnosis_features,
+            icu_unit_features=icu_unit_features,
+            sofa_features=sofa_features,
         )

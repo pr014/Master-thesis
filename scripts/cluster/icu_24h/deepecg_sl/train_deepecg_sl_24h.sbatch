@@ -120,8 +120,27 @@ echo "Training DeepECG-SL (WCR + Self-Supervised Pretraining) for 24h Dataset"
 echo "Two-Phase Training: Phase 1 (Frozen) + Phase 2 (Fine-tuning)"
 echo "============================================================"
 
-# Training starten
-python scripts/training/icu_24h/deepecg_sl/train_deepecg_sl_24h.py
+if [ -n "${MODEL_CONFIG_PATH:-}" ]; then
+    echo "MODEL_CONFIG_PATH=${MODEL_CONFIG_PATH}"
+fi
+if [ -n "${EXPERIMENT_CONFIG_PATH:-}" ]; then
+    echo "EXPERIMENT_CONFIG_PATH=${EXPERIMENT_CONFIG_PATH}"
+fi
+if [ -n "${TRIAL_ID:-}" ]; then
+    echo "TRIAL_ID=${TRIAL_ID}"
+fi
+if [ -n "${SWEEP_ID:-}" ]; then
+    echo "SWEEP_ID=${SWEEP_ID}"
+fi
+
+CLI_ARGS=("$@")
+if [ -n "${TRAIN_EXTRA_ARGS:-}" ]; then
+    read -r -a EXTRA_ARGS <<< "${TRAIN_EXTRA_ARGS}"
+    CLI_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+echo "Forwarded CLI args: ${CLI_ARGS[*]:-(none)}"
+
+python scripts/training/icu_24h/deepecg_sl/train_deepecg_sl_24h.py "${CLI_ARGS[@]}"
 
 TRAINING_EXIT_CODE=$?
 

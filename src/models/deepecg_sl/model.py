@@ -67,7 +67,14 @@ class DeepECG_SL(BaseECGModel):
         self.use_icu_units = icu_unit_config.get("enabled", False)
         icu_unit_list = icu_unit_config.get("icu_unit_list", [])
         icu_unit_dim = len(icu_unit_list) if self.use_icu_units else 0
-        
+
+        sofa_config = data_config.get("sofa_features", {})
+        self.use_sofa = sofa_config.get("enabled", False)
+        sofa_columns = sofa_config.get("columns", ["sofa_total"])
+        if isinstance(sofa_columns, str):
+            sofa_columns = [sofa_columns]
+        self.sofa_dim = len(sofa_columns) if self.use_sofa else 0
+
         # Determine device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -90,7 +97,9 @@ class DeepECG_SL(BaseECGModel):
             fused_feature_dim += diagnosis_dim
         if self.use_icu_units:
             fused_feature_dim += icu_unit_dim
-        
+        if self.use_sofa:
+            fused_feature_dim += self.sofa_dim
+
         # Shared layers
         self.shared_bn = nn.BatchNorm1d(fused_feature_dim)
         self.shared_dropout1 = nn.Dropout(dropout_rate)
@@ -135,6 +144,7 @@ class DeepECG_SL(BaseECGModel):
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads.
         
@@ -143,7 +153,8 @@ class DeepECG_SL(BaseECGModel):
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU unit features of shape (B, icu_unit_dim)
-            
+            sofa_features: Optional SOFA vector of shape (B, sofa_dim)
+
         Returns:
             Features tensor of shape (B, shared_dim)
         """
@@ -174,11 +185,22 @@ class DeepECG_SL(BaseECGModel):
         if self.use_icu_units and icu_unit_features is not None:
             icu_unit_features = icu_unit_features.to(x.device)
             x = torch.cat([x, icu_unit_features], dim=1)
-        
+        if self.use_sofa:
+            if sofa_features is None:
+                sofa_features = torch.zeros(
+                    x.shape[0],
+                    self.sofa_dim,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+            else:
+                sofa_features = sofa_features.to(x.device)
+            x = torch.cat([x, sofa_features], dim=1)
+
         # Shared layer
         # BatchNorm expects (B, C) for 1D
         if x.dim() == 2:
-            x = self.shared_bn(x)  # (B, 768+2+diagnosis_dim+icu_unit_dim) or (B, 768)
+            x = self.shared_bn(x)  # (B, 768 + tabular) or (B, 768)
         x = self.shared_dropout1(x)
         x = self.shared_fc(x)  # (B, 128)
         x = self.shared_relu(x)
@@ -192,6 +214,7 @@ class DeepECG_SL(BaseECGModel):
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass returning LOS prediction and mortality probabilities.
         
@@ -200,7 +223,8 @@ class DeepECG_SL(BaseECGModel):
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
             diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU unit features of shape (B, icu_unit_dim)
-            
+            sofa_features: Optional SOFA features of shape (B, sofa_dim)
+
         Returns:
             Tuple of:
                 - los_predictions: LOS regression output of shape (B, 1) - continuous LOS in days
@@ -211,7 +235,8 @@ class DeepECG_SL(BaseECGModel):
             x,
             demographic_features=demographic_features,
             diagnosis_features=diagnosis_features,
-            icu_unit_features=icu_unit_features
+            icu_unit_features=icu_unit_features,
+            sofa_features=sofa_features,
         )
         
         # Task-specific heads
@@ -227,6 +252,7 @@ class DeepECG_SL(BaseECGModel):
         demographic_features: Optional[torch.Tensor] = None,
         diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
+        sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads (for MultiTaskECGModel compatibility).
         
@@ -235,7 +261,8 @@ class DeepECG_SL(BaseECGModel):
             demographic_features: Optional demographic features
             diagnosis_features: Optional diagnosis features
             icu_unit_features: Optional ICU unit features
-            
+            sofa_features: Optional SOFA features
+
         Returns:
             Features tensor of shape (B, shared_dim)
         """
@@ -243,5 +270,6 @@ class DeepECG_SL(BaseECGModel):
             x,
             demographic_features=demographic_features,
             diagnosis_features=diagnosis_features,
-            icu_unit_features=icu_unit_features
+            icu_unit_features=icu_unit_features,
+            sofa_features=sofa_features,
         )

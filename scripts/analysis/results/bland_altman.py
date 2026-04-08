@@ -83,7 +83,6 @@ def _build_model(config: dict, checkpoint_path: Path, device: torch.device):
         HybridCNNLSTM,
         DeepECG_SL,
         HuBERT_ECG,
-        XResNetPTBXL,
     )
     from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
     from src.models.core.multi_task_model import MultiTaskECGModel
@@ -96,7 +95,6 @@ def _build_model(config: dict, checkpoint_path: Path, device: torch.device):
         "hybridcnnlstm": HybridCNNLSTM,
         "deepecg_sl": DeepECG_SL,
         "hubert_ecg": HuBERT_ECG,
-        "xresnetptbxl": XResNetPTBXL,
     }
     if model_type not in mapping:
         raise ValueError(f"Unknown model type: {model_type!r}. Supported: {list(mapping)}")

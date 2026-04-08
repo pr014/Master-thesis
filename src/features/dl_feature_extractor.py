@@ -14,7 +14,6 @@ from ..utils.config_loader import load_config
 from src.models import (
     CNNScratch,
     HybridCNNLSTM,
-    XResNetPTBXL,
 )
 from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
 from src.models.core.multi_task_model import MultiTaskECGModel
@@ -52,8 +51,6 @@ def load_model_from_checkpoint(
         base_model = LSTM1D_Bidirectional(config)
     elif model_type == "hybridcnnlstm":
         base_model = HybridCNNLSTM(config)
-    elif model_type == "xresnetptbxl":
-        base_model = XResNetPTBXL(config)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     

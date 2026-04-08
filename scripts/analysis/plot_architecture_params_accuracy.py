@@ -2,7 +2,7 @@
 """
 Plot diagrams connecting parameter count with accuracy for each model architecture.
 
-Generates one diagram per architecture: XGBoost, CNN Scratch, LSTM Uni, LSTM Bi, DeepECG-SL, HuBERT-ECG.
+Generates one diagram per architecture: XGBoost, CNN Scratch, LSTM Uni, LSTM Bi, Hybrid CNN-LSTM, DeepECG-SL, HuBERT-ECG.
 Each diagram shows parameter count and accuracy (or placeholder if not yet evaluated).
 
 Usage:
@@ -35,7 +35,6 @@ MODEL_ORDER = [
     "LSTM Uni",
     "LSTM Bi",
     "Hybrid CNN-LSTM",
-    "XResNet PTB-XL",
     "DeepECG-SL",
     "HuBERT-ECG",
 ]
@@ -48,7 +47,7 @@ def get_parameter_counts(load_heavy_models: bool = False) -> dict[str, int]:
     """
     try:
         from src.utils.config_loader import load_config
-        from src.models import CNNScratch, HybridCNNLSTM, XResNetPTBXL
+        from src.models import CNNScratch, HybridCNNLSTM
         from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
     except ImportError as e:
         print(f"Warning: Could not import models, using fallback: {e}")
@@ -95,14 +94,6 @@ def get_parameter_counts(load_heavy_models: bool = False) -> dict[str, int]:
     except Exception:
         params["Hybrid CNN-LSTM"] = 900_000
 
-    # XResNet PTB-XL
-    try:
-        cfg = load_config(model_config_path=Path("configs/model/xresnet1d_ptbxl/xresnet1d_ptbxl.yaml"))
-        m = XResNetPTBXL(cfg)
-        params["XResNet PTB-XL"] = m.count_parameters()
-    except Exception:
-        params["XResNet PTB-XL"] = 1_881_192
-
     # DeepECG-SL, HuBERT-ECG: skip by default (require HuggingFace/checkpoints)
     if load_heavy_models:
         try:
@@ -134,7 +125,6 @@ def _fallback_params() -> dict[str, int]:
         "LSTM Uni": 233_000,
         "LSTM Bi": 596_000,
         "Hybrid CNN-LSTM": 900_000,
-        "XResNet PTB-XL": 1_881_192,
         "DeepECG-SL": 100_000_000,
         "HuBERT-ECG": 93_000_000,
     }

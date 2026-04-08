@@ -1,7 +1,8 @@
 # Hybrid CNN-LSTM - Vollständige Konfiguration
 # Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
-# Tabular: SOFA (sofa_total) + ICU unit (one-hot); demographics off; Late Fusion
-# Augmentation: Gaussian noise, amplitude scaling, baseline wander, lead dropout
+# Datensatz: icu_ecgs_24h/P1 (Preprocessing P1 im data_dir)
+# Tabular (Late Fusion): SOFA (sofa_total) + ICU unit (one-hot) + Demographics (Age/Sex)
+# Augmentation: Gaussian noise, lead dropout, baseline wander, time-segment shuffle (no amplitude scaling)
 # Improved architecture with mean pooling and dropout between LSTM layers
 
 # =============================================================================
@@ -42,12 +43,12 @@ data:
     filter_order: 4
     normalize: "zscore"
   
-  # Data augmentation (all four methods enabled)
+  # Augmentation: Gaussian noise, lead dropout, baseline wander, time-segment shuffle
   augmentation:
     enabled: true
     gaussian_noise: true
     noise_std: 0.03
-    amplitude_scaling: true
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
     baseline_wander: true
@@ -57,6 +58,9 @@ data:
     bw_amp_max: 0.08
     lead_dropout: true
     lead_dropout_prob: 0.1
+    time_segment_shuffle: true
+    time_segment_shuffle_num_segments: 5
+    time_segment_shuffle_p: 0.5
   
   # Demographics (late fusion): Age + Sex
   demographic_features:
@@ -80,7 +84,7 @@ data:
   icu_unit_features:
     enabled: true
     encoding: "onehot"
-    # Top-10 first_careunit by ICU stay count (same list as configs/features/icu_unit_features.yaml, DeepECG-SL, LSTM, XResNet)
+    # Top-10 first_careunit by ICU stay count (same list as configs/features/icu_unit_features.yaml, DeepECG-SL, LSTM)
     icu_unit_list:
       - "Medical Intensive Care Unit (MICU)"
       - "Medical/Surgical Intensive Care Unit (MICU/SICU)"

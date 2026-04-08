@@ -1,0 +1,25 @@
+# Optuna tuning base override for DeepECG-SL (merged on top of configs/model/deepecg_sl/deepecg_sl.yaml).
+# P1 dataset, WCR_77_classes + pretrained paths stay from base model config.
+# Tabular features off; augmentation subset: gaussian noise, lead dropout, baseline wander only.
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+
+  demographic_features:
+    enabled: false
+
+  diagnosis_features:
+    enabled: false
+
+  icu_unit_features:
+    enabled: false
+
+  sofa_features:
+    enabled: false
+
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    lead_dropout: true
+    baseline_wander: true
+    amplitude_scaling: false

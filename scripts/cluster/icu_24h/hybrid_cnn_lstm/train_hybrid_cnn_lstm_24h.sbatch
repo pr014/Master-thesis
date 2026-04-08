@@ -127,8 +127,35 @@ echo "============================================================"
 echo "Training Hybrid CNN-LSTM for 24h Dataset"
 echo "============================================================"
 
-# Training starten (Full augmentation: Gaussian + Amplitude + BaselineWander + LeadDropout)
-python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py
+# Optional trial metadata / config overrides can be forwarded either as:
+# 1) explicit script args after sbatch, or
+# 2) environment variables consumed by the Python entrypoint.
+if [ -n "${MODEL_CONFIG_PATH:-}" ]; then
+    echo "MODEL_CONFIG_PATH=${MODEL_CONFIG_PATH}"
+fi
+if [ -n "${EXPERIMENT_CONFIG_PATH:-}" ]; then
+    echo "EXPERIMENT_CONFIG_PATH=${EXPERIMENT_CONFIG_PATH}"
+fi
+if [ -n "${TRIAL_ID:-}" ]; then
+    echo "TRIAL_ID=${TRIAL_ID}"
+fi
+if [ -n "${SWEEP_ID:-}" ]; then
+    echo "SWEEP_ID=${SWEEP_ID}"
+fi
+
+CLI_ARGS=("$@")
+
+# Optional convenience env var for additional args, e.g.
+# TRAIN_EXTRA_ARGS="--trial-id trial_001 --sweep-id demo"
+if [ -n "${TRAIN_EXTRA_ARGS:-}" ]; then
+    read -r -a EXTRA_ARGS <<< "${TRAIN_EXTRA_ARGS}"
+    CLI_ARGS+=("${EXTRA_ARGS[@]}")
+fi
+
+echo "Forwarded CLI args: ${CLI_ARGS[*]:-(none)}"
+
+# Training starten
+python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py "${CLI_ARGS[@]}"
 
 TRAINING_EXIT_CODE=$?
 

@@ -1,7 +1,8 @@
-# HuBERT-ECG large - Vollständige Konfiguration (H2 / clones/HuBERT-ECG)
-# Large pretrained weights (hidden_size=960) | Keine Late-Fusion-Features | Alle Augmentations
-# Self-supervised pretrained model with Transfer Learning
-# H2: LR head 1e-4, backbone 1e-5, deep 1e-7 | AdamW | LinearScheduleWithWarmup 8% | feature extractor frozen in Phase 2
+# HuBERT-ECG — Small weights (hidden_size=512 laut config.json), H2-Training (AdamW, Warmup, Phasen)
+# Wie Job 3730714 (P1, H2, AG4): Daten P1, Augmentation AG4-Subset ohne Amplitude-Scaling
+# Tabular wie Hybrid/DeepECG: Demographics + ICU-Unit + SOFA (Late Fusion)
+# Phase 1: eingefrorener Backbone, nur Heads (max. Epochen = training.num_epochs)
+# Phase 2: unfrozen Transformer, Feature-Extractor bleibt frozen (Skript: max 20 Epochen)
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -22,10 +23,10 @@ data:
   sampling_rate: 500.0
   window_seconds: 10.0
   num_leads: 12
-  
+
   los_task: "regression"
   split_strategy: "temporal_stratified"
-  
+
   preprocessing:
     target_sampling_rate: 500.0
     window_seconds: 10.0
@@ -34,12 +35,13 @@ data:
     filter_highcut: 50.0
     filter_order: 4
     normalize: "zscore"
-  
+
+  # Wie Hybrid/DeepECG: Gaussian, Lead Drop, Baseline Wander — kein Amplitude-Scaling
   augmentation:
     enabled: true
     gaussian_noise: true
     noise_std: 0.03
-    amplitude_scaling: true
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
     baseline_wander: true
@@ -49,13 +51,50 @@ data:
     bw_amp_max: 0.08
     lead_dropout: true
     lead_dropout_prob: 0.1
-  
-  # Variable Late Fusion Features (alle ausgeschaltet)
+
   demographic_features:
-    enabled: false
-  
+    enabled: true
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    age_normalization: "minmax"
+    age_min: 0
+    age_max: 120
+    sex_encoding: "binary"
+    missing_age_strategy: "median"
+    missing_sex_strategy: "default"
+
   diagnosis_features:
     enabled: false
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    diagnosis_list: []
+    diagnosis_columns:
+      - "all_diag_all"
+    missing_strategy: "zero"
+
+  icu_unit_features:
+    enabled: true
+    encoding: "onehot"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    unknown_strategy: "other"
+    missing_strategy: "most_common"
+
+  sofa_features:
+    enabled: true
+    csv_path: "data/labeling/labels_csv/sofa_scores.csv"
+    columns:
+      - sofa_total
+    require_available: true
+    filter_to_valid_sofa: true
+    normalize: "none"
 
 # =============================================================================
 # MODEL ARCHITECTURE
@@ -63,72 +102,53 @@ data:
 
 model:
   type: "HuBERT_ECG"
-  num_classes: 8  # Will be overridden by los_binning config (exact_days with max_days=7)
-  
-  # HuBERT Encoder Configuration
+  num_classes: 8
+
   hubert:
-    checkpoint_path: "model-2.safetensors"  # Relative to cache_dir, or absolute path
-    config_path: "config-2.json"  # Optional, relative to cache_dir
-    hidden_size: 960  # HuBERT large: 960
-    freeze_backbone: true  # Initial freeze for transfer learning (Phase 1)
-    # Phase 2 unfrozen transformer needs far more VRAM; checkpointing trades compute for memory
-    gradient_checkpointing: true
-    # Preprocessing configuration:
-    # - apply_preprocessing: false (default) - Use for P1 dataset which is already preprocessed:
-    #   * Bandpass: Butterworth (0.5-50 Hz, 4th order, filtfilt)
-    #   * Resampling: 500 Hz
-    #   * Segmentation: 10s = 5000 samples
-    #   * Normalization: Z-score per lead (mean=0, std=1)
-    # - apply_preprocessing: true - Apply HuBERT-specific preprocessing (for raw data only):
-    #   * Bandpass: FIR (0.05-47 Hz) - DIFFERENT from P1 preprocessing!
-    #   * Normalization: Min-Max scaling [-1, 1] - DIFFERENT from P1 preprocessing!
-    #   WARNING: Do not apply both preprocessing methods - they are incompatible!
-    apply_preprocessing: false  # false = use P1 preprocessed data (recommended)
-    
-  # NO input_adapter Config!
-  # HuBERT has built-in Feature Extractor (5 Conv Layers with downsampling)
-  # Input: (B, 12, 5000) @ 500Hz → Feature Extractor → (B, seq_len, 512)
-  
-  # Pretrained weights (large: hidden_size=960)
+    checkpoint_path: "model.safetensors"
+    config_path: "config.json"
+    hidden_size: 512
+    freeze_backbone: true
+    gradient_checkpointing: false
+    apply_preprocessing: false
+
   pretrained:
     enabled: true
-    cache_dir: "data/pretrained_weights/Hubert_ECG/large"
-    
-  # Feature dimensions (large encoder output: 960)
-  feature_dim: 960  # Output from HuBERT large encoder
-  shared_dim: 128  # Shared layer dimension
+    cache_dir: "data/pretrained_weights/Hubert_ECG/small"
+
+  feature_dim: 512
+  shared_dim: 128
 
 # =============================================================================
-# TRAINING HYPERPARAMETERS
+# TRAINING (H2: Batch 32, AdamW, Linear warmup 8%, Huber/MSE — hier MSE)
 # =============================================================================
 
 training:
-  # Large + Phase 2 (unfrozen transformer): use 8 (with gradient_checkpointing); raise if VRAM allows
-  batch_size: 8
+  batch_size: 32
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "AdamW"
-    lr: 1e-4  # Phase 1 / head LR (H2; min 1e-7 enforced to prevent LR=0 bug)
-    backbone_lr: 1e-5  # Phase 2: last 4 transformer layers
-    deep_backbone_lr: 1e-7  # Phase 2: feature projection + earlier transformer layers
+    lr: 1.0e-4
+    backbone_lr: 1.0e-5
+    deep_backbone_lr: 1.0e-7
     weight_decay: 0.01
     betas: [0.9, 0.98]
-  
+
   gradient_clip_norm: 1.0
-  dropout_rate: 0.1  # classifier_dropout_prob from original HuBERT-ECG paper (default: 0.1)
-  
+  dropout_rate: 0.1
+
   scheduler:
     type: "LinearScheduleWithWarmup"
     warmup_steps_pct: 0.08
-  
+
   loss:
     type: "mse"
 
 # =============================================================================
-# VALIDATION & TEST SETTINGS
+# VALIDATION & TEST
 # =============================================================================
 
 validation:
@@ -138,7 +158,7 @@ validation:
 test_split: 0.1
 
 # =============================================================================
-# EARLY STOPPING
+# EARLY STOPPING (H2: patience 7)
 # =============================================================================
 
 early_stopping:
