@@ -18,7 +18,7 @@ class HybridCNNLSTM(BaseECGModel):
       * Layer 2: 128 per direction → 256 output (input is 256 from Layer 1)
       * Dropout between layers (default: 0.2)
     - Pooling: Mean pooling (uses all timesteps, recommended) or last/max
-    - Late fusion with demographics and diagnoses (optional)
+    - Late fusion with demographics, ICU unit, SOFA, and therapy-support flags (optional)
     - Shared layer: BN → Dropout → Dense(64) → ReLU → Dropout
     - Output: LOS prediction (B, 1) for regression or (B, num_classes) for classification
     
@@ -148,12 +148,6 @@ class HybridCNNLSTM(BaseECGModel):
         data_config = config.get("data", {})
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
-        
-        # Check if diagnosis features are enabled
-        diagnosis_config = data_config.get("diagnosis_features", {})
-        self.use_diagnoses = diagnosis_config.get("enabled", False)
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
 
         # Check if ICU unit features are enabled
         icu_unit_config = data_config.get("icu_unit_features", {})
@@ -168,17 +162,35 @@ class HybridCNNLSTM(BaseECGModel):
             sofa_columns = [sofa_columns]
         self.sofa_dim = len(sofa_columns) if self.use_sofa else 0
 
+        therapy_config = data_config.get("icu_therapy_support_features", {})
+        self.use_icu_therapy_support = therapy_config.get("enabled", False)
+        therapy_columns = therapy_config.get(
+            "columns",
+            [
+                "mech_vent",
+                "niv_hfnc",
+                "vaso_any",
+                "vaso_non_catechol_any",
+                "rrt",
+            ],
+        )
+        if isinstance(therapy_columns, str):
+            therapy_columns = [therapy_columns]
+        self.icu_therapy_support_dim = (
+            len(therapy_columns) if self.use_icu_therapy_support else 0
+        )
+
         feature_dim = lstm_output_dim
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3
             feature_dim += demo_dim
-        if self.use_diagnoses:
-            feature_dim += diagnosis_dim
         if self.use_icu_units:
             feature_dim += icu_unit_dim
         if self.use_sofa:
             feature_dim += self.sofa_dim
+        if self.use_icu_therapy_support:
+            feature_dim += self.icu_therapy_support_dim
 
         # Shared layer
         self.bn_final = nn.BatchNorm1d(feature_dim)
@@ -238,9 +250,9 @@ class HybridCNNLSTM(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
         apply_lstm_dropout: bool = False
     ) -> torch.Tensor:
         # CNN blocks
@@ -271,12 +283,10 @@ class HybridCNNLSTM(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)
 
-        # Late fusion with demographics, diagnoses, and ICU units
+        # Late fusion with demographics and ICU units
         fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
             fused_features = torch.cat([fused_features, demographic_features], dim=1)
-        if self.use_diagnoses and diagnosis_features is not None:
-            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         if self.use_icu_units and icu_unit_features is not None:
             fused_features = torch.cat([fused_features, icu_unit_features], dim=1)
         if self.use_sofa:
@@ -288,6 +298,17 @@ class HybridCNNLSTM(BaseECGModel):
                     dtype=fused_features.dtype,
                 )
             fused_features = torch.cat([fused_features, sofa_features], dim=1)
+        if self.use_icu_therapy_support:
+            if icu_therapy_support_features is None:
+                icu_therapy_support_features = torch.zeros(
+                    fused_features.shape[0],
+                    self.icu_therapy_support_dim,
+                    device=fused_features.device,
+                    dtype=fused_features.dtype,
+                )
+            fused_features = torch.cat(
+                [fused_features, icu_therapy_support_features], dim=1
+            )
 
         # Shared layer
         x = self.bn_final(fused_features)
@@ -302,9 +323,9 @@ class HybridCNNLSTM(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Forward pass returning LOS prediction.
         
@@ -317,9 +338,9 @@ class HybridCNNLSTM(BaseECGModel):
         features = self._forward_features(
             x, 
             demographic_features=demographic_features, 
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
+            icu_therapy_support_features=icu_therapy_support_features,
             apply_lstm_dropout=False  # No dropout between LSTM layers in forward (like Bidirectional LSTM)
         )
         return self.fc_los(features)
@@ -328,9 +349,9 @@ class HybridCNNLSTM(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before final LOS head.
         
@@ -338,13 +359,13 @@ class HybridCNNLSTM(BaseECGModel):
         
         Returns:
             Feature tensor of shape (B, feature_dim) after pooling and before fc.
-            If demographic/diagnosis/ICU unit features are enabled, this includes them.
+            If demographic/ICU unit features are enabled, this includes them.
         """
         return self._forward_features(
             x, 
             demographic_features=demographic_features, 
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
+            icu_therapy_support_features=icu_therapy_support_features,
             apply_lstm_dropout=True  # Apply dropout between LSTM layers in get_features (like Bidirectional LSTM)
         )

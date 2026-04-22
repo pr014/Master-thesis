@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 
 from ..core.base_model import BaseECGModel
+from ...data.ecg.ecg_dataset import ehr_window_feature_dim
 from .input_adapter import InputAdapter
 from .wcr_encoder import WCREncoder
 
@@ -20,7 +21,7 @@ class DeepECG_SL(BaseECGModel):
     - Input Adapter: Conv1D (5000 → 2500)
     - WCR Encoder: Pretrained Transformer (2500 → seq_len, 768)
     - Global Pooling: (seq_len, 768) → (768)
-    - Late Fusion: Concat([ECG(768), demographics(2), diagnoses(N)])
+    - Late Fusion: Concat([ECG(768), demographics, ICU unit, SOFA, therapy support])
     - Shared Layers: BN → Dropout → FC(770+N → 128) → ReLU → Dropout
     - LOS Head: FC(128 → 1) for regression (continuous LOS in days)
     - Mortality Head: FC(128 → 1) + Sigmoid
@@ -36,7 +37,6 @@ class DeepECG_SL(BaseECGModel):
                 - model.pretrained.*: Pretrained weights configuration
                 - training.dropout_rate: Dropout rate for shared layers
                 - data.demographic_features.enabled: Whether to use demographics
-                - data.diagnosis_features.enabled: Whether to use diagnoses
                 - data.task_type: "regression" (default) or "classification"
         """
         super().__init__(config)
@@ -52,15 +52,10 @@ class DeepECG_SL(BaseECGModel):
         feature_dim = model_config.get("feature_dim", 768)
         shared_dim = model_config.get("shared_dim", 128)
         
-        # Check demographic and diagnosis features
+        # Check demographic features
         data_config = config.get("data", {})
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
-        
-        diagnosis_config = data_config.get("diagnosis_features", {})
-        self.use_diagnoses = diagnosis_config.get("enabled", False)
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
         
         # Check if ICU unit features are enabled
         icu_unit_config = data_config.get("icu_unit_features", {})
@@ -74,6 +69,21 @@ class DeepECG_SL(BaseECGModel):
         if isinstance(sofa_columns, str):
             sofa_columns = [sofa_columns]
         self.sofa_dim = len(sofa_columns) if self.use_sofa else 0
+
+        therapy_config = data_config.get("icu_therapy_support_features", {})
+        self.use_icu_therapy_support = therapy_config.get("enabled", False)
+        therapy_columns = therapy_config.get("columns", [])
+        if isinstance(therapy_columns, str):
+            therapy_columns = [therapy_columns]
+        self.icu_therapy_support_dim = (
+            len(therapy_columns) if self.use_icu_therapy_support else 0
+        )
+
+        ehr_cfg = data_config.get("ehr_window_features", {})
+        self.use_ehr_window = ehr_cfg.get("enabled", False)
+        self.ehr_window_dim = (
+            ehr_window_feature_dim(ehr_cfg) if self.use_ehr_window else 0
+        )
 
         # Determine device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,12 +103,14 @@ class DeepECG_SL(BaseECGModel):
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3
             fused_feature_dim += demo_dim
-        if self.use_diagnoses:
-            fused_feature_dim += diagnosis_dim
         if self.use_icu_units:
             fused_feature_dim += icu_unit_dim
         if self.use_sofa:
             fused_feature_dim += self.sofa_dim
+        if self.use_icu_therapy_support:
+            fused_feature_dim += self.icu_therapy_support_dim
+        if self.use_ehr_window and self.ehr_window_dim > 0:
+            fused_feature_dim += self.ehr_window_dim
 
         # Shared layers
         self.shared_bn = nn.BatchNorm1d(fused_feature_dim)
@@ -142,18 +154,20 @@ class DeepECG_SL(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads.
         
         Args:
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
-            diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU unit features of shape (B, icu_unit_dim)
             sofa_features: Optional SOFA vector of shape (B, sofa_dim)
+            icu_therapy_support_features: Optional therapy flags of shape (B, therapy_dim)
+            ehr_window_features: Optional EHR window aggregate vector (B, ehr_window_dim)
 
         Returns:
             Features tensor of shape (B, shared_dim)
@@ -174,14 +188,11 @@ class DeepECG_SL(BaseECGModel):
         # Squeeze: (B, 768, 1) → (B, 768)
         x = x.squeeze(-1)  # (B, 768)
         
-        # Late fusion with demographics, diagnoses, and ICU units
+        # Late fusion with demographics and ICU units
         # Ensure all tensors are on the same device
         if self.use_demographics and demographic_features is not None:
             demographic_features = demographic_features.to(x.device)
             x = torch.cat([x, demographic_features], dim=1)
-        if self.use_diagnoses and diagnosis_features is not None:
-            diagnosis_features = diagnosis_features.to(x.device)
-            x = torch.cat([x, diagnosis_features], dim=1)
         if self.use_icu_units and icu_unit_features is not None:
             icu_unit_features = icu_unit_features.to(x.device)
             x = torch.cat([x, icu_unit_features], dim=1)
@@ -196,6 +207,28 @@ class DeepECG_SL(BaseECGModel):
             else:
                 sofa_features = sofa_features.to(x.device)
             x = torch.cat([x, sofa_features], dim=1)
+        if self.use_icu_therapy_support:
+            if icu_therapy_support_features is None:
+                icu_therapy_support_features = torch.zeros(
+                    x.shape[0],
+                    self.icu_therapy_support_dim,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+            else:
+                icu_therapy_support_features = icu_therapy_support_features.to(x.device)
+            x = torch.cat([x, icu_therapy_support_features], dim=1)
+        if self.use_ehr_window and self.ehr_window_dim > 0:
+            if ehr_window_features is None:
+                ehr_window_features = torch.zeros(
+                    x.shape[0],
+                    self.ehr_window_dim,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+            else:
+                ehr_window_features = ehr_window_features.to(x.device)
+            x = torch.cat([x, ehr_window_features], dim=1)
 
         # Shared layer
         # BatchNorm expects (B, C) for 1D
@@ -212,18 +245,20 @@ class DeepECG_SL(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass returning LOS prediction and mortality probabilities.
         
         Args:
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
-            diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU unit features of shape (B, icu_unit_dim)
             sofa_features: Optional SOFA features of shape (B, sofa_dim)
+            icu_therapy_support_features: Optional ICU therapy support of shape (B, therapy_dim)
+            ehr_window_features: Optional EHR window features of shape (B, ehr_window_dim)
 
         Returns:
             Tuple of:
@@ -234,9 +269,10 @@ class DeepECG_SL(BaseECGModel):
         features = self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
+            icu_therapy_support_features=icu_therapy_support_features,
+            ehr_window_features=ehr_window_features,
         )
         
         # Task-specific heads
@@ -250,18 +286,20 @@ class DeepECG_SL(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before task heads (for MultiTaskECGModel compatibility).
         
         Args:
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features
-            diagnosis_features: Optional diagnosis features
             icu_unit_features: Optional ICU unit features
             sofa_features: Optional SOFA features
+            icu_therapy_support_features: Optional ICU therapy support features
+            ehr_window_features: Optional EHR window aggregate features
 
         Returns:
             Features tensor of shape (B, shared_dim)
@@ -269,7 +307,8 @@ class DeepECG_SL(BaseECGModel):
         return self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
+            icu_therapy_support_features=icu_therapy_support_features,
+            ehr_window_features=ehr_window_features,
         )

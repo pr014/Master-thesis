@@ -62,14 +62,6 @@ data:
     missing_age_strategy: "median"
     missing_sex_strategy: "default"
 
-  diagnosis_features:
-    enabled: false
-    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
-    diagnosis_list: []
-    diagnosis_columns:
-      - "all_diag_all"
-    missing_strategy: "zero"
-
   icu_unit_features:
     enabled: true
     encoding: "onehot"

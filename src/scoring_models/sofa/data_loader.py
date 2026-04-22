@@ -775,6 +775,56 @@ def load_vasopressors_per_ecg(ecg_frame: pd.DataFrame) -> pd.DataFrame:
     return _aggregate_vaso_per_base_path(merged)
 
 
+def _aggregate_non_catechol_pressor_any_per_base_path(merged: pd.DataFrame) -> pd.DataFrame:
+    """Pro base_path: 1 wenn rate oder amount > 0 für Non-Katecholamin-Pressoren."""
+    if len(merged) == 0:
+        return pd.DataFrame(columns=["base_path", "vaso_non_catechol_any"])
+    rows = []
+    for base_path, group in merged.groupby("base_path"):
+        rate_pos = (group["rate"].fillna(0) > 0).any()
+        amt_pos = (group["amount"].fillna(0) > 0).any()
+        rows.append({"base_path": base_path, "vaso_non_catechol_any": int(bool(rate_pos or amt_pos))})
+    return pd.DataFrame(rows)
+
+
+def load_non_catecholamine_pressors_per_ecg(ecg_frame: pd.DataFrame) -> pd.DataFrame:
+    """Vasopressin / Phenylephrin: Überlappung [stay_intime, ecg_time] wie load_vasopressors_per_ecg."""
+    relevant_itemids = itemids.get_non_catecholamine_pressor_input_itemids()
+    stay_ids = ecg_frame["stay_id"].unique().tolist()
+    ecg_keys = ecg_frame[
+        ["base_path", "subject_id", "hadm_id", "stay_id", "ecg_time", "stay_intime"]
+    ].copy()
+
+    print(f"  Lade inputevents (Vasopressin/Phenylephrin, bis ecg_time)...")
+    input_df = pd.read_csv(
+        config.MIMIC_IV_PATHS["inputevents"],
+        usecols=["subject_id", "hadm_id", "stay_id", "itemid", "starttime", "endtime", "rate", "amount"],
+    )
+    input_df = input_df[
+        (input_df["stay_id"].isin(stay_ids)) & (input_df["itemid"].isin(relevant_itemids))
+    ]
+    if len(input_df) == 0:
+        print("  ⚠️  Keine Non-Katecholamin-Pressor-Daten!")
+        return pd.DataFrame()
+
+    input_df["starttime"] = pd.to_datetime(input_df["starttime"])
+    input_df["endtime"] = pd.to_datetime(input_df["endtime"], errors="coerce")
+
+    merged = input_df.merge(
+        ecg_keys,
+        on=["subject_id", "hadm_id", "stay_id"],
+        how="inner",
+    )
+    end_eff = merged["endtime"].fillna(merged["ecg_time"])
+    merged = merged[
+        (merged["starttime"] <= merged["ecg_time"])
+        & (end_eff >= merged["stay_intime"])
+    ]
+    if len(merged) == 0:
+        return pd.DataFrame()
+    return _aggregate_non_catechol_pressor_any_per_base_path(merged)
+
+
 def load_urine_output_per_ecg(ecg_frame: pd.DataFrame) -> pd.DataFrame:
     """Summe Urin zwischen stay_intime und ecg_time (nicht fix 24h)."""
     relevant_itemids = itemids.get_all_outputevents_itemids()
@@ -909,6 +959,171 @@ def load_sofa_data_per_ecg(ecg_mapping: pd.DataFrame) -> pd.DataFrame:
 
 
 # =============================================================================
+# THERAPIE-FLAGS PRO ECG (charttime / Infusion ≤ ecg_time, stay_id-getrennt)
+# =============================================================================
+
+
+def _aggregate_therapy_chart_per_base_path(chart_df: pd.DataFrame) -> pd.DataFrame:
+    """Pro base_path: binär mech_vent, niv_hfnc, rrt aus chartevents-Itemgruppen."""
+    if len(chart_df) == 0:
+        return pd.DataFrame(columns=["base_path", "mech_vent", "niv_hfnc", "rrt"])
+    rows = []
+    vent_ids = set(itemids.MECHANICAL_VENTILATION_ITEMIDS)
+    niv_ids = set(itemids.NIV_HFNC_CHART_ITEMIDS)
+    rrt_ids = set(itemids.DIALYSIS_RRT_CHART_ITEMIDS)
+    for base_path, group in chart_df.groupby("base_path"):
+        ids = set(group["itemid"].unique())
+        rows.append(
+            {
+                "base_path": base_path,
+                "mech_vent": int(bool(ids & vent_ids)),
+                "niv_hfnc": int(bool(ids & niv_ids)),
+                "rrt": int(bool(ids & rrt_ids)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def load_chartevents_therapy_per_ecg(ecg_frame: pd.DataFrame) -> pd.DataFrame:
+    """Nur Beatmungs- und Dialyse/CRRT-chartevents im Fenster [stay_intime, ecg_time]."""
+    relevant_itemids = itemids.get_therapy_support_chart_itemids()
+    stay_ids = set(ecg_frame["stay_id"].unique())
+    ecg_keys = ecg_frame[
+        ["base_path", "subject_id", "hadm_id", "stay_id", "ecg_time", "stay_intime"]
+    ].copy()
+
+    chunk_list = []
+    print(f"  Lade chartevents (Therapie-Flags, charttime ≤ ecg_time)...")
+    chunk_iter = pd.read_csv(
+        config.MIMIC_IV_PATHS["chartevents"],
+        usecols=["subject_id", "hadm_id", "stay_id", "itemid", "charttime", "valuenum", "value"],
+        chunksize=config.CHUNK_SIZE,
+    )
+    for chunk in tqdm(chunk_iter, desc="  chartevents therapy chunks"):
+        chunk = chunk[
+            (chunk["stay_id"].isin(stay_ids)) & (chunk["itemid"].isin(relevant_itemids))
+        ]
+        if len(chunk) == 0:
+            continue
+        chunk["charttime"] = pd.to_datetime(chunk["charttime"])
+        merged = chunk.merge(
+            ecg_keys,
+            on=["subject_id", "hadm_id", "stay_id"],
+            how="inner",
+        )
+        merged = merged[
+            (merged["charttime"] >= merged["stay_intime"])
+            & (merged["charttime"] <= merged["ecg_time"])
+        ]
+        if len(merged) > 0:
+            chunk_list.append(merged)
+
+    if not chunk_list:
+        print("  ⚠️  Keine Therapie-Chart-Events im ECG-Fenster!")
+        return pd.DataFrame()
+    chart_df = pd.concat(chunk_list, ignore_index=True)
+    return _aggregate_therapy_chart_per_base_path(chart_df)
+
+
+def build_therapy_support_export(ecg_mapping: pd.DataFrame) -> pd.DataFrame:
+    """
+    Eine Zeile pro ECG (wie timestamps/sofa): stay_id-/zeitkorrekt, leakage-frei.
+
+    - mech_vent, niv_hfnc, vaso_any, vaso_non_catechol_any, rrt: 0/1 nur wenn
+      ``therapy_labels_available`` (ICU-Merge + ecg im Stay).
+    - Ohne Stay oder ohne Zeile in ``prepare_ecg_sofa_frame``: NaN für die Flag-Spalten.
+    """
+    out = ecg_mapping.copy()
+    out["ecg_time"] = pd.to_datetime(out["ecg_time"])
+    out["therapy_stay_matched"] = out["stay_id"].notna()
+    out["hadm_id"] = np.nan
+    out["mech_vent"] = np.nan
+    out["niv_hfnc"] = np.nan
+    out["vaso_any"] = np.nan
+    out["vaso_non_catechol_any"] = np.nan
+    out["rrt"] = np.nan
+    out["therapy_labels_available"] = False
+
+    ecg_frame = prepare_ecg_sofa_frame(ecg_mapping)
+    if len(ecg_frame) == 0:
+        return out
+
+    chart_flags = load_chartevents_therapy_per_ecg(ecg_frame)
+    vaso_df = load_vasopressors_per_ecg(ecg_frame)
+    non_cat_df = load_non_catecholamine_pressors_per_ecg(ecg_frame)
+
+    tv = ecg_frame[["base_path", "subject_id", "hadm_id", "stay_id", "ecg_time"]].drop_duplicates(
+        subset=["base_path"]
+    )
+    if len(chart_flags) == 0:
+        tv["mech_vent"] = 0
+        tv["niv_hfnc"] = 0
+        tv["rrt"] = 0
+    else:
+        tv = tv.merge(chart_flags, on="base_path", how="left")
+        tv["mech_vent"] = tv["mech_vent"].fillna(0).astype(int)
+        tv["niv_hfnc"] = tv["niv_hfnc"].fillna(0).astype(int)
+        tv["rrt"] = tv["rrt"].fillna(0).astype(int)
+
+    if len(vaso_df) == 0:
+        tv["vaso_any"] = 0
+    else:
+        vaso_df = vaso_df.copy()
+        for c in ["dopamine", "norepinephrine", "epinephrine", "dobutamine"]:
+            if c not in vaso_df.columns:
+                vaso_df[c] = 0.0
+        vaso_df["vaso_any"] = (
+            (vaso_df["dopamine"].fillna(0) > 0)
+            | (vaso_df["norepinephrine"].fillna(0) > 0)
+            | (vaso_df["epinephrine"].fillna(0) > 0)
+            | (vaso_df["dobutamine"].fillna(0) > 0)
+        ).astype(int)
+        tv = tv.merge(vaso_df[["base_path", "vaso_any"]], on="base_path", how="left")
+        tv["vaso_any"] = tv["vaso_any"].fillna(0).astype(int)
+
+    if len(non_cat_df) == 0:
+        tv["vaso_non_catechol_any"] = 0
+    else:
+        tv = tv.merge(non_cat_df, on="base_path", how="left")
+        tv["vaso_non_catechol_any"] = tv["vaso_non_catechol_any"].fillna(0).astype(int)
+
+    tv["therapy_labels_available"] = True
+
+    merge_cols = [
+        "base_path",
+        "hadm_id",
+        "mech_vent",
+        "niv_hfnc",
+        "vaso_any",
+        "vaso_non_catechol_any",
+        "rrt",
+        "therapy_labels_available",
+    ]
+    tv_small = tv[merge_cols].copy()
+
+    drop_therapy = [
+        "hadm_id",
+        "mech_vent",
+        "niv_hfnc",
+        "vaso_any",
+        "vaso_non_catechol_any",
+        "rrt",
+        "therapy_labels_available",
+    ]
+    out = out.drop(columns=drop_therapy, errors="ignore")
+    out = out.merge(tv_small, on="base_path", how="left")
+
+    avail = out["therapy_labels_available"].fillna(False).astype(bool)
+    out["therapy_labels_available"] = avail
+    flag_cols = ["mech_vent", "niv_hfnc", "vaso_any", "vaso_non_catechol_any", "rrt"]
+    for c in flag_cols:
+        out.loc[~avail, c] = np.nan
+    out.loc[avail, flag_cols] = out.loc[avail, flag_cols].astype(int)
+    out["therapy_stay_matched"] = out["stay_id"].notna()
+    return out
+
+
+# =============================================================================
 # EXPORT
 # =============================================================================
 
@@ -922,5 +1137,8 @@ __all__ = [
     'load_urine_output',
     'merge_sofa_data',
     'prepare_ecg_sofa_frame',
+    'load_chartevents_therapy_per_ecg',
+    'load_non_catecholamine_pressors_per_ecg',
+    'build_therapy_support_export',
 ]
 

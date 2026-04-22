@@ -1,64 +1,97 @@
-# Master Thesis: ICU LOS Prediction from 12-Lead ECG
+# ICU Length-of-Stay from 12-Lead ECG
 
-Deep Learning models for predicting ICU Length of Stay (LOS) and mortality from 12-lead ECG signals (MIMIC-IV-ECG).
+PyTorch codebase for **master thesis** work: predict **ICU length of stay (LOS, days)** from short **12-lead ECG** windows, with optional **mortality** as an auxiliary multi-task head. Data pipeline targets **MIMIC-IV-ECG**-style ICU cohorts (e.g. 24h extracts).
 
-**Tasks**: LOS Regression (continuous) + Mortality Classification (binary)  
-**Models**: CNN, LSTM, Hybrid CNN-LSTM, DeepECG-SL, HuBERT-ECG, XGBoost
+## Scope
 
-## Project Structure
+- **Primary task:** LOS regression (continuous).
+- **Secondary task:** Binary mortality (shared training; threshold for F1 chosen on validation).
+- **Fusion:** Optional tabular inputs—demographics, ICU unit (one-hot), **SOFA** (and similar non-ECG signals where configured).
+
+## Models
+
+| Model | Role |
+|--------|------|
+| **Hybrid CNN-LSTM** | Main scratch architecture; end-to-end training. |
+| **DeepECG-SL** | WCR / wav2vec-style encoder; local pretrained weights; fine-tuning (phase-2–style run in current script). |
+| **HuBERT-ECG** | Foundation-style encoder; **two-phase** train (frozen backbone → partial unfreeze). |
+| CNN / LSTM / CNN-from-scratch | Lighter baselines under `scripts/training/icu_24h/`. |
+| **XGBoost** | Classical baseline (`scripts/training/classical_ml/`). |
+
+**Hyperparameters:** [Optuna](https://optuna.org/) workers for Hybrid and DeepECG (`scripts/tuning/`, shared DB storage on cluster). HuBERT typically uses fixed YAML schedules.
+
+## Layout
 
 ```
-MA-thesis-1/
-├── configs/model/     # Model configs (hybrid_cnn_lstm, deepecg_sl, hubert_ecg, lstm, cnn_scratch)
-├── configs/classical_ml/  # XGBoost configs
-├── scripts/training/  # Training scripts (icu_24h/, classical_ml/)
-├── scripts/cluster/   # SLURM sbatch scripts
-├── scripts/analysis/  # parse_training_results, evaluate_subgroup, plot_*
-├── src/               # data/, models/, training/, features/
-├── data/              # Datasets, pretrained weights (not in git)
-└── outputs/           # Checkpoints, logs (not in git)
+configs/model/          # hybrid_cnn_lstm, deepecg_sl, hubert_ecg, …
+configs/tuning/         # Optuna base overlays + best-trial exports (as used)
+scripts/training/       # icu_24h/, classical_ml/
+scripts/tuning/         # Optuna workers + exports
+scripts/cluster/        # SLURM sbatch
+scripts/analysis/       # metrics, plots, subgroup eval
+src/                    # data, models, training, features
+app/                    # optional Streamlit clinic demo (DeepECG-SL inference)
+data/, outputs/         # local only (not in git)
 ```
 
-## Models (Overview)
+## Clinic demo (Streamlit)
 
-| Model | Params | Notes |
-|-------|--------|-------|
-| CNNScratch | ~50-100K | Baseline from scratch |
-| LSTM (Uni/Bi) | ~233K / ~596K | 2-layer, mean pooling |
-| Hybrid CNN-LSTM | ~700K-1M | CNN + BiLSTM |
-| DeepECG-SL | ~100M | WCR Transformer, 2-phase training |
-| HuBERT-ECG | ~93M | HuBERT Transformer, 2-phase training |
-| XGBoost | - | Handcrafted or DL features |
+Small **inference-only** UI under `app/`: upload a 12-lead window, optionally set tabular fields, run **DeepECG-SL** multi-task (LOS + mortality probability). Not a medical device.
 
-All DL models support optional **late fusion** with demographics (Age & Sex), diagnosis (ICD-10), and ICU unit features.
-
-## Quick Start
+**1. Dependencies** — install from repo root (includes **Streamlit** and **fairseq-signals** for DeepECG-SL):
 
 ```bash
-# Local
-python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py
-python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py
-
-# Cluster (SLURM)
-sbatch scripts/cluster/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.sbatch
-
-# Parse results
-python scripts/analysis/parse_training_results.py --job <JOB_ID>
+pip install -r requirements.txt
 ```
 
-## Requirements
+If the clinic app still reports a missing `fairseq_signals` import, install the Git dependency explicitly (network required):
 
-- `requirements.txt`
-- **DeepECG-SL**: `pip install git+https://github.com/HeartWise-AI/fairseq-signals.git`
-- **HuBERT-ECG**: Pretrained weights in `data/pretrained_weights/Hubert_ECG/base/`
+```bash
+pip install 'git+https://github.com/HeartWise-AI/fairseq-signals.git'
+```
 
-## Datasets
+**2. Pretrained backbone** — same as training: WCR weights under `data/pretrained_weights/deepecg_sl/` as in `configs/model/deepecg_sl/deepecg_sl.yaml`.
 
-- **icu_24h**: ECGs from first 24h of ICU stay, bandpass 0.5–50 Hz, 500 Hz, 10 s segments (5000 samples)
-- **all_icu_ecgs**: Full ICU ECG dataset
-- Split: Temporal stratified, ~80/10/10 train/val/test
+**3. Trained checkpoint** — a file saved by training, e.g.  
+`outputs/checkpoints/DeepECG_SL_best_<SLURM_JOB_ID>.pt`  
+with **`config`** and **`model_state_dict`** inside.
 
-## Evaluation Metrics
+**4. Run the app** (from repo root):
 
-**LOS**: MAE, RMSE, R², Median AE  
-**Mortality**: AUC-ROC, F1, Precision, Recall
+```bash
+streamlit run app/clinic_app.py
+```
+
+**5. Load the model in the UI** — sidebar:
+
+- Either set **`MA_THESIS_CLINIC_CKPT`** to the full path before starting (used as default), **or**
+- Paste the path into **“Pfad zum Checkpoint (.pt)”**. If unset, the app **prefills the newest** `outputs/checkpoints/DeepECG_SL_best_*.pt` when that file exists.
+- Click **“Modell laden”** and wait until the success message appears.
+
+More detail: `app/README.md`.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt   # includes fairseq-signals (DeepECG)
+
+python scripts/training/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.py
+python scripts/training/icu_24h/deepecg_sl/train_deepecg_sl_24h.py
+python scripts/training/icu_24h/hubert_ecg/train_hubert_ecg_24h.py
+```
+
+Override knobs with `--experiment-config <merged_yaml>` (see `configs/tuning/`). On the cluster, submit the matching `scripts/cluster/icu_24h/*/*.sbatch` jobs.
+
+## Data & splits
+
+- **Preprocessed ECG:** 500 Hz, bandpass, z-score; 10 s segments (e.g. 12×5000). Paths set in YAML (`data.data_dir`).
+- **Split:** Subject-level **temporal stratified** split (~80/10/10) with optional LOS stratification inside time bands—see data chapter / `create_dataloaders`.
+
+## Metrics
+
+**LOS:** MAE, RMSE, R², median AE. **Mortality:** AUC-ROC; F1/precision/recall at validation-tuned threshold.
+
+## Notes
+
+- Place **pretrained checkpoints** under `data/pretrained_weights/` as referenced in the model YAMLs (DeepECG WCR, HuBERT-ECG).
+- Set `SLURM_JOB_ID` (or tuning env) so checkpoints and logs are traceable per job.

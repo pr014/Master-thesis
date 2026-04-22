@@ -19,9 +19,6 @@ data:
   sofa_features:
     enabled: true
 
-  diagnosis_features:
-    enabled: false
-
   augmentation:
     enabled: true
     gaussian_noise: true

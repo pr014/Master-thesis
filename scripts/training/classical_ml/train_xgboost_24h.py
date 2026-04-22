@@ -27,17 +27,15 @@ def extract_features_from_dataloader(
     Extract features from DataLoader.
     
     Returns:
-        Tuple of (X_features, y_los, demographic_features, diagnosis_features, y_mortality):
+        Tuple of (X_features, y_los, demographic_features, y_mortality):
         - y_mortality: Optional (N,) mortality labels 0/1 or -1 if not available; None if not in batch.
     """
     feature_config = config.get("features", {})
     use_demographics = feature_config.get("use_demographics", False)
-    use_diagnoses = feature_config.get("use_diagnoses", False)
     
     all_features = []
     all_labels = []
     all_demographic_features = []
-    all_diagnosis_features = []
     all_mortality = []
     
     if feature_type == "handcrafted":
@@ -66,18 +64,12 @@ def extract_features_from_dataloader(
             all_features.append(np.vstack(batch_features))
             all_labels.append(labels)
             
-            # Collect demographic and diagnosis features if available
+            # Collect demographic features if available
             if use_demographics and "demographic_features" in batch:
                 demo_features = batch["demographic_features"]
                 if demo_features is not None:
                     demo_features = demo_features.numpy()[valid_mask]
                     all_demographic_features.append(demo_features)
-            
-            if use_diagnoses and "diagnosis_features" in batch:
-                diag_features = batch["diagnosis_features"]
-                if diag_features is not None:
-                    diag_features = diag_features.numpy()[valid_mask]
-                    all_diagnosis_features.append(diag_features)
             
             if "mortality_label" in batch:
                 mort = batch["mortality_label"].numpy()[valid_mask]
@@ -101,35 +93,25 @@ def extract_features_from_dataloader(
             device=device,
         )
         
-        # Collect demographic and diagnosis features if available
+        # Collect demographic features if available
         all_demographic_features = None
-        all_diagnosis_features = None
-        if use_demographics or use_diagnoses:
+        if use_demographics:
             demo_features_list = []
-            diag_features_list = []
             
             for batch in dataloader:
                 labels = batch["label"].numpy()
                 valid_mask = labels >= 0
                 
-                if use_demographics and "demographic_features" in batch:
+                if "demographic_features" in batch:
                     demo_features = batch["demographic_features"]
                     if demo_features is not None:
                         demo_features = demo_features.numpy()[valid_mask]
                         demo_features_list.append(demo_features)
-                
-                if use_diagnoses and "diagnosis_features" in batch:
-                    diag_features = batch["diagnosis_features"]
-                    if diag_features is not None:
-                        diag_features = diag_features.numpy()[valid_mask]
-                        diag_features_list.append(diag_features)
             
             if demo_features_list:
                 all_demographic_features = np.vstack(demo_features_list)
-            if diag_features_list:
-                all_diagnosis_features = np.vstack(diag_features_list)
         
-        return X, y_los, all_demographic_features if all_demographic_features else None, all_diagnosis_features if all_diagnosis_features else None, None
+        return X, y_los, all_demographic_features if all_demographic_features else None, None
     
     else:
         raise ValueError(f"Unknown feature_type: {feature_type}. Must be 'handcrafted' or 'dl_features'")
@@ -138,31 +120,25 @@ def extract_features_from_dataloader(
     X = np.vstack(all_features) if all_features else np.array([])
     y_los = np.concatenate(all_labels) if all_labels else np.array([])
     
-    # Combine demographic and diagnosis features if available
+    # Combine demographic features if available
     demographic_features = None
     if all_demographic_features:
         demographic_features = np.vstack(all_demographic_features)
     
-    diagnosis_features = None
-    if all_diagnosis_features:
-        diagnosis_features = np.vstack(all_diagnosis_features)
-    
     y_mortality = np.concatenate(all_mortality) if all_mortality else None
-    return X, y_los, demographic_features, diagnosis_features, y_mortality
+    return X, y_los, demographic_features, y_mortality
 
 
 def combine_features(
     X_ecg: np.ndarray,
     demographic_features: Optional[np.ndarray] = None,
-    diagnosis_features: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Combine ECG features with demographic and diagnosis features.
+    Combine ECG features with optional demographic features.
     
     Args:
         X_ecg: ECG features (N, ecg_feature_dim).
         demographic_features: Optional demographic features (N, demo_dim).
-        diagnosis_features: Optional diagnosis features (N, diag_dim).
     
     Returns:
         Combined features (N, total_feature_dim).
@@ -171,9 +147,6 @@ def combine_features(
     
     if demographic_features is not None:
         features_list.append(demographic_features)
-    
-    if diagnosis_features is not None:
-        features_list.append(diagnosis_features)
     
     return np.hstack(features_list)
 
@@ -208,7 +181,6 @@ def main():
     print(f"Augmentation: {config.get('data', {}).get('augmentation', {}).get('enabled', False)}")
     print(f"Multi-task (mortality): {config.get('multi_task', {}).get('enabled', False)}")
     print(f"Use demographics: {config.get('features', {}).get('use_demographics', False)}")
-    print(f"Use diagnoses: {config.get('features', {}).get('use_diagnoses', False)}")
     print("="*60)
     
     # Setup ICU mapper
@@ -242,7 +214,7 @@ def main():
     
     # Extract features from train set (optionally multiple augmented passes)
     print("Extracting train features...")
-    X_train, y_train, demo_train, diag_train, y_mort_train = extract_features_from_dataloader(
+    X_train, y_train, demo_train, y_mort_train = extract_features_from_dataloader(
         train_loader,
         feature_type=feature_type,
         config=config,
@@ -250,30 +222,28 @@ def main():
     )
     for pass_i in range(1, aug_mult):
         print(f"  Augmentation pass {pass_i + 1}/{aug_mult}...")
-        X_a, y_a, d_a, di_a, m_a = extract_features_from_dataloader(
+        X_a, y_a, d_a, m_a = extract_features_from_dataloader(
             train_loader, feature_type=feature_type, config=config, device=device,
         )
         X_train = np.vstack([X_train, X_a])
         y_train = np.concatenate([y_train, y_a])
         if demo_train is not None and d_a is not None:
             demo_train = np.vstack([demo_train, d_a])
-        if diag_train is not None and di_a is not None:
-            diag_train = np.vstack([diag_train, di_a])
         if y_mort_train is not None and m_a is not None:
             y_mort_train = np.concatenate([y_mort_train, m_a])
     
     # Extract features from validation set
     print("Extracting validation features...")
-    X_val, y_val, demo_val, diag_val, y_mort_val = extract_features_from_dataloader(
+    X_val, y_val, demo_val, y_mort_val = extract_features_from_dataloader(
         val_loader,
         feature_type=feature_type,
         config=config,
         device=device,
     )
     
-    # Combine with demographic and diagnosis features if available
-    X_train_combined = combine_features(X_train, demo_train, diag_train)
-    X_val_combined = combine_features(X_val, demo_val, diag_val)
+    # Combine with demographic features if available
+    X_train_combined = combine_features(X_train, demo_train)
+    X_val_combined = combine_features(X_val, demo_val)
     
     print(f"Train features shape: {X_train_combined.shape}")
     print(f"Val features shape: {X_val_combined.shape}")
@@ -334,13 +304,13 @@ def main():
     # Evaluate on test set if available
     if test_loader is not None:
         print("\nExtracting test features...")
-        X_test, y_test, demo_test, diag_test, y_mort_test = extract_features_from_dataloader(
+        X_test, y_test, demo_test, y_mort_test = extract_features_from_dataloader(
             test_loader,
             feature_type=feature_type,
             config=config,
             device=device,
         )
-        X_test_combined = combine_features(X_test, demo_test, diag_test)
+        X_test_combined = combine_features(X_test, demo_test)
         
         print(f"Test features shape: {X_test_combined.shape}")
         print(f"Test samples: {len(y_test)}")

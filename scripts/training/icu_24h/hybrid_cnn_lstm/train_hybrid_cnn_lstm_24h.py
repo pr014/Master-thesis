@@ -86,13 +86,6 @@ def run_training(
     else:
         print("Demographic features: Disabled")
 
-    diagnosis_config = config.get("data", {}).get("diagnosis_features", {})
-    if diagnosis_config.get("enabled", False):
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
-    else:
-        print("Diagnosis features: Disabled")
-
     icu_unit_config = config.get("data", {}).get("icu_unit_features", {})
     print(f"ICU unit features: {icu_unit_config.get('enabled', False)}")
     if icu_unit_config.get("enabled", False):
@@ -106,6 +99,14 @@ def run_training(
         )
     else:
         print("SOFA features: Disabled")
+    therapy_cfg = config.get("data", {}).get("icu_therapy_support_features", {})
+    if therapy_cfg.get("enabled", False):
+        print(
+            f"ICU therapy support features: Enabled (columns={therapy_cfg.get('columns', [])}, "
+            f"filter_to_labeled_only={therapy_cfg.get('filter_to_labeled_only', True)})"
+        )
+    else:
+        print("ICU therapy support features: Disabled")
     print("=" * 60)
 
     # Load ICU stays and create mapper

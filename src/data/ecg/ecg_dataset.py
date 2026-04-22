@@ -1,8 +1,9 @@
 """PyTorch Dataset wrapper for ECG data."""
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Tuple
 from datetime import datetime
 from pathlib import Path
+import hashlib
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -86,6 +87,106 @@ def tabular_join_path_key(base_path: str, data_dir: Optional[str]) -> str:
     return raw.as_posix()
 
 
+# --- EHR window aggregates (EHR_feature_data.csv), same join key as SOFA/therapy ---
+
+EHR_VITAL_ORDER = [
+    "heart_rate",
+    "respiratory_rate",
+    "oxygen_saturation",
+    "map",
+    "sbp",
+    "dbp",
+    "temperature",
+]
+
+
+def ehr_window_feature_dim(cfg: Dict[str, Any]) -> int:
+    """Length of the late-fusion vector for ``data.ehr_window_features``."""
+    if not cfg.get("enabled", False):
+        return 0
+    per_vital = 2 + (1 if cfg.get("include_vital_n", True) else 0)
+    n = len(EHR_VITAL_ORDER) * per_vital + 4  # platelets/creatinine worst+n
+    n += 1 + (1 if cfg.get("include_urine_rate", True) else 0)  # sum + optional rate
+    return n
+
+
+def _ehr_safe_float(x: Any) -> float:
+    try:
+        v = float(x)
+        if np.isnan(v) or np.isinf(v):
+            return 0.0
+        return v
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def raw_ehr_vector_from_row(row: pd.Series, cfg: Dict[str, Any]) -> np.ndarray:
+    """Raw numeric vector (no z-score) from one EHR CSV row."""
+    include_n = bool(cfg.get("include_vital_n", True))
+    include_urine_rate = bool(cfg.get("include_urine_rate", True))
+    parts: List[float] = []
+    for name in EHR_VITAL_ORDER:
+        parts.append(_ehr_safe_float(row.get(f"{name}_mean")))
+        parts.append(_ehr_safe_float(row.get(f"{name}_last")))
+        if include_n:
+            parts.append(_ehr_safe_float(row.get(f"{name}_n")))
+    parts.append(_ehr_safe_float(row.get("platelets_worst")))
+    parts.append(_ehr_safe_float(row.get("platelets_n")))
+    parts.append(_ehr_safe_float(row.get("creatinine_worst")))
+    parts.append(_ehr_safe_float(row.get("creatinine_n")))
+    urine = _ehr_safe_float(row.get("urine_ml_sum"))
+    parts.append(urine)
+    if include_urine_rate:
+        hrs = _ehr_safe_float(row.get("ehr_window_hours"))
+        parts.append(urine / hrs if hrs > 1e-6 else 0.0)
+    return np.asarray(parts, dtype=np.float32)
+
+
+def compute_ehr_zscore_stats(
+    train_records: List[Dict[str, Any]],
+    cfg: Dict[str, Any],
+    project_root: Path,
+    data_dir: Optional[str],
+) -> Tuple[List[float], List[float]]:
+    """Column-wise mean/std on train rows present in the EHR CSV (train-only normalization)."""
+    csv_path = cfg.get("csv_path", "data/labeling/labels_csv/EHR_feature_data.csv")
+    path = Path(csv_path)
+    if not path.is_absolute():
+        path = project_root / path
+    if not path.exists():
+        raise FileNotFoundError(f"EHR feature CSV not found: {path}")
+
+    df = pd.read_csv(path, low_memory=False)
+    if "base_path" not in df.columns:
+        raise ValueError("EHR CSV must contain base_path")
+
+    train_keys = {
+        tabular_join_path_key(str(r.get("base_path", "")), data_dir)
+        for r in train_records
+    }
+    train_keys.discard("")
+
+    mats: List[np.ndarray] = []
+    for _, row in df.iterrows():
+        bp = row.get("base_path")
+        if pd.isna(bp):
+            continue
+        key = tabular_join_path_key(str(bp), data_dir)
+        if key not in train_keys:
+            continue
+        mats.append(raw_ehr_vector_from_row(row, cfg))
+
+    dim = ehr_window_feature_dim(cfg)
+    if not mats:
+        return [0.0] * dim, [1.0] * dim
+
+    mat = np.stack(mats, axis=0)
+    mean = np.nanmean(mat, axis=0)
+    std = np.nanstd(mat, axis=0)
+    std = np.where(std < 1e-8, 1.0, std)
+    return mean.astype(np.float64).tolist(), std.astype(np.float64).tolist()
+
+
 class ECGDataset(Dataset):
     """PyTorch Dataset for ECG signals with LOS regression labels.
     
@@ -110,6 +211,7 @@ class ECGDataset(Dataset):
         config: Optional[Dict[str, Any]] = None,
         regression_weights: Optional[Dict[int, float]] = None,
         los_binning: Optional[Dict[str, Any]] = None,
+        ehr_window_norm: Optional[Tuple[List[float], List[float]]] = None,
     ):
         """Initialize ECG Dataset.
         
@@ -128,6 +230,7 @@ class ECGDataset(Dataset):
             config: Optional full configuration dictionary. Used to read task_type settings.
             regression_weights: Optional dict mapping LOS bin_idx -> weight for sample weighting.
             los_binning: Optional config for binning (strategy, max_days) for weight lookup.
+            ehr_window_norm: Optional ``(mean, std)`` for EHR window features (train-computed z-score).
         """
         # Use ECGNPYDataset if records contain 'npy_path', otherwise use ECGDemoDataset
         if records and "npy_path" in records[0]:
@@ -162,18 +265,6 @@ class ECGDataset(Dataset):
         if self.demographic_features_enabled:
             self._load_demographic_features()
         
-        # Diagnosis features configuration
-        data_config = config.get("data", {}) if config else {}
-        self.diagnosis_features_config = data_config.get("diagnosis_features", {})
-        self.diagnosis_features_enabled = self.diagnosis_features_config.get("enabled", False)
-        self.diagnosis_mapping = {}  # record_name -> binary_vector (List[int])
-        self.diagnosis_list = self.diagnosis_features_config.get("diagnosis_list", [])
-        self.diagnosis_dim = len(self.diagnosis_list) if self.diagnosis_list else 0
-        
-        # Load diagnosis features if enabled
-        if self.diagnosis_features_enabled:
-            self._load_diagnosis_features()
-        
         # ICU unit features configuration
         data_config = config.get("data", {}) if config else {}
         self.icu_unit_features_config = data_config.get("icu_unit_features", {})
@@ -197,6 +288,30 @@ class ECGDataset(Dataset):
         if self.sofa_features_enabled:
             self._load_sofa_features()
         
+        # ICU therapy support (late fusion; binary columns from labeling CSV)
+        self.icu_therapy_support_config = data_config.get(
+            "icu_therapy_support_features", {}
+        )
+        self.icu_therapy_support_enabled = self.icu_therapy_support_config.get(
+            "enabled", False
+        )
+        self.icu_therapy_mapping: Dict[str, List[float]] = {}
+        self.icu_therapy_dim = 0
+        if self.icu_therapy_support_enabled:
+            self._load_icu_therapy_support_features()
+
+        # EHR window tabular (vitals mean/last/[n], labs worst/n, urine sum/[rate])
+        self.ehr_window_features_config = data_config.get("ehr_window_features", {})
+        self.ehr_window_features_enabled = self.ehr_window_features_config.get(
+            "enabled", False
+        )
+        self._ehr_raw_by_key: Dict[str, np.ndarray] = {}
+        self.ehr_window_features_dim = 0
+        self._ehr_norm_mean: Optional[np.ndarray] = None
+        self._ehr_norm_std: Optional[np.ndarray] = None
+        if self.ehr_window_features_enabled:
+            self._load_ehr_window_features(ehr_window_norm)
+        
         # Task type: "regression" (default) or "classification" (backward compatibility)
         self.task_type = data_config.get("task_type", "regression")
         
@@ -206,6 +321,18 @@ class ECGDataset(Dataset):
         self._binning_strategy = los_binning.get("strategy", "intervals")
         self._binning_max_days = los_binning.get("max_days", 9)
         self._binning_boundaries = los_binning.get("boundaries")
+
+        aug_cfg = data_config.get("augmentation", {})
+        mb_ts_cfg = aug_cfg.get("mortality_balance_time_shuffle", {})
+        self._mortality_balance_ts_enabled = bool(mb_ts_cfg.get("enabled", False))
+        self._mortality_balance_ts_module: Optional[torch.nn.Module] = None
+        if self._mortality_balance_ts_enabled:
+            from ..augmentation.ecg_augmentation import TimeSegmentShuffle
+
+            self._mortality_balance_ts_module = TimeSegmentShuffle(
+                num_segments=int(aug_cfg.get("time_segment_shuffle_num_segments", 5)),
+                p=1.0,
+            )
         
         # Statistics
         self.matched_count = 0
@@ -473,303 +600,6 @@ class ECGDataset(Dataset):
                 sex_encoded = torch.tensor([0.0, 1.0], dtype=torch.float32)
             return torch.cat([torch.tensor([age_normalized], dtype=torch.float32), sex_encoded])
     
-    def _load_diagnosis_features(self) -> None:
-        """Load diagnosis features (ICD-10 codes) from CSV file.
-        
-        Creates a mapping from record_name to binary_vector for fast lookup.
-        Binary vector indicates presence (1) or absence (0) of each diagnosis.
-        
-        IMPORTANT: Automatically filters diagnoses where admittime < ecg_time 
-        to prevent data leakage when enabled=True.
-        """
-        csv_path = self.diagnosis_features_config.get("records_csv_path")
-        if not csv_path:
-            print("Warning: diagnosis_features.enabled is True but records_csv_path not specified.")
-            self.diagnosis_features_enabled = False
-            return
-        
-        if not self.diagnosis_list:
-            print("Warning: diagnosis_features.enabled is True but diagnosis_list is empty.")
-            self.diagnosis_features_enabled = False
-            return
-        
-        # Resolve path (relative to project root or absolute)
-        csv_path = Path(csv_path)
-        if not csv_path.is_absolute():
-            # Try to find project root
-            project_root = Path(__file__).parent.parent.parent.parent
-            csv_path = project_root / csv_path
-        
-        if not csv_path.exists():
-            print(f"Warning: Diagnosis features CSV not found at {csv_path}. Disabling diagnosis features.")
-            self.diagnosis_features_enabled = False
-            return
-        
-        # Get diagnosis columns to search
-        diagnosis_columns = self.diagnosis_features_config.get("diagnosis_columns", ["all_diag_all"])
-        if not isinstance(diagnosis_columns, list):
-            diagnosis_columns = [diagnosis_columns]
-        
-        # Load CSV with diagnosis columns + time/ID columns for filtering
-        try:
-            # Load all needed columns (including time/ID for filtering)
-            needed_cols = ['file_name', 'ecg_time', 'subject_id', 'hosp_hadm_id'] + diagnosis_columns
-            # Filter to only columns that exist
-            df_all = pd.read_csv(csv_path, nrows=0)  # Read header only
-            available_cols = [col for col in needed_cols if col in df_all.columns]
-            
-            if not any(col in available_cols for col in diagnosis_columns):
-                print(f"Warning: None of the diagnosis columns {diagnosis_columns} found in CSV. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Check if we have the required columns for time filtering
-            has_ecg_time = 'ecg_time' in available_cols
-            has_subject_id = 'subject_id' in available_cols
-            has_hadm_id = 'hosp_hadm_id' in available_cols
-            
-            if not has_ecg_time or not has_subject_id or not has_hadm_id:
-                print(f"Warning: Missing required columns for time filtering (ecg_time, subject_id, hosp_hadm_id). Disabling diagnosis features.")
-                print(f"  Available columns: {available_cols}")
-                self.diagnosis_features_enabled = False
-                return
-            
-            df = pd.read_csv(csv_path, usecols=available_cols, low_memory=False)
-            print(f"Loaded diagnosis features from {csv_path}: {len(df):,} records")
-            
-            # TIME-BASED FILTERING: Match to ICU stays and filter admittime < ecg_time
-            print("Applying time-based filtering: admittime < ecg_time")
-            
-            # Load icustays.csv to get stay_id -> hadm_id mapping
-            icustays_path = csv_path.parent / "icustays.csv"
-            if not icustays_path.exists():
-                print(f"Warning: icustays.csv not found at {icustays_path}. Cannot apply time filtering. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Load icustays with required columns
-            icustays_header = pd.read_csv(icustays_path, nrows=0)
-            icustays_cols = ['stay_id', 'subject_id', 'intime', 'outtime']
-            if 'hadm_id' in icustays_header.columns:
-                icustays_cols.append('hadm_id')
-            
-            icustays_df = pd.read_csv(icustays_path, usecols=icustays_cols, low_memory=False)
-            icustays_df['intime'] = pd.to_datetime(icustays_df['intime'], utc=True, errors='coerce')
-            icustays_df['outtime'] = pd.to_datetime(icustays_df['outtime'], utc=True, errors='coerce')
-            icustays_df = icustays_df.dropna(subset=['intime', 'outtime'])
-            print(f"Loaded ICU stays data: {len(icustays_df):,} records")
-            
-            # Convert ecg_time to datetime
-            df['ecg_time'] = pd.to_datetime(df['ecg_time'], utc=True, errors='coerce')
-            
-            # Drop rows with invalid timestamps
-            before_time_clean = len(df)
-            df = df.dropna(subset=['ecg_time']).copy()
-            after_time_clean = len(df)
-            if before_time_clean != after_time_clean:
-                print(f"Removed {before_time_clean - after_time_clean:,} records with invalid ecg_time")
-            
-            if len(df) == 0:
-                print("Warning: No records with valid ecg_time. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Match ECGs to ICU stays: subject_id + ecg_time within intime/outtime
-            print("Matching ECGs to ICU stays...")
-            df_with_stays = df.merge(
-                icustays_df[['stay_id', 'subject_id', 'intime', 'outtime'] + (['hadm_id'] if 'hadm_id' in icustays_df.columns else [])],
-                on='subject_id',
-                how='inner'
-            )
-            
-            # Filter: ecg_time must be within intime/outtime window
-            time_mask = (df_with_stays['ecg_time'] >= df_with_stays['intime']) & (df_with_stays['ecg_time'] <= df_with_stays['outtime'])
-            df_matched = df_with_stays[time_mask].copy()
-            
-            # Handle multiple matches: if one ECG matches multiple stays, pick the closest to intime
-            if len(df_matched) > 0:
-                df_matched['time_diff'] = (df_matched['ecg_time'] - df_matched['intime']).dt.total_seconds()
-                df_matched['rank'] = df_matched.groupby('file_name')['time_diff'].rank(method='min')
-                df_matched = df_matched[df_matched['rank'] == 1].drop(columns=['time_diff', 'rank'])
-            
-            print(f"Matched {len(df_matched):,} ECGs to ICU stays (from {len(df):,} total)")
-            
-            if len(df_matched) == 0:
-                print("Warning: No ECGs matched to ICU stays. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Get hadm_id from icustays (if not already present)
-            if 'hadm_id' not in df_matched.columns:
-                if 'hadm_id' in icustays_df.columns:
-                    df_matched = df_matched.merge(
-                        icustays_df[['stay_id', 'hadm_id']],
-                        on='stay_id',
-                        how='left'
-                    )
-                else:
-                    print("Warning: hadm_id not available in icustays.csv. Cannot apply time filtering. Disabling diagnosis features.")
-                    self.diagnosis_features_enabled = False
-                    return
-            
-            # Check for missing hadm_id after merge
-            if df_matched['hadm_id'].isna().any():
-                missing_count = df_matched['hadm_id'].isna().sum()
-                print(f"Warning: {missing_count:,} ECGs have missing hadm_id. Removing them.")
-                df_matched = df_matched.dropna(subset=['hadm_id'])
-            
-            if len(df_matched) == 0:
-                print("Warning: No ECGs with valid hadm_id. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Load admissions.csv to get admittime
-            admissions_path = csv_path.parent / "admissions.csv"
-            if not admissions_path.exists():
-                print(f"Warning: admissions.csv not found at {admissions_path}. Cannot apply time filtering. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            admissions_df = pd.read_csv(
-                admissions_path,
-                usecols=['subject_id', 'hadm_id', 'admittime'],
-                low_memory=False
-            )
-            admissions_df['admittime'] = pd.to_datetime(admissions_df['admittime'], utc=True, errors='coerce')
-            admissions_df = admissions_df.dropna(subset=['admittime'])
-            print(f"Loaded admissions data: {len(admissions_df):,} records")
-            
-            # Merge with admissions to get admittime
-            df_merged = df_matched.merge(
-                admissions_df,
-                on=['subject_id', 'hadm_id'],
-                how='inner'
-            )
-            
-            # Filter: only keep records where admittime < ecg_time
-            before_filter = len(df_merged)
-            df_filtered = df_merged[df_merged['admittime'] < df_merged['ecg_time']].copy()
-            after_filter = len(df_filtered)
-            
-            print(f"Time filtering: {before_filter:,} records -> {after_filter:,} records ({after_filter/before_filter*100:.1f}% kept)")
-            
-            if len(df_filtered) == 0:
-                print("Warning: No records remain after time filtering. Disabling diagnosis features.")
-                self.diagnosis_features_enabled = False
-                return
-            
-            # Remove duplicate ECGs (keep first if any remain after filtering)
-            duplicate_ecgs = df_filtered.groupby('file_name').size()
-            if (duplicate_ecgs > 1).any():
-                num_duplicates = (duplicate_ecgs > 1).sum()
-                print(f"Warning: Found {num_duplicates:,} ECGs with multiple matches after filtering. Keeping first occurrence.")
-                df_filtered = df_filtered.drop_duplicates(subset=['file_name'], keep='first')
-            
-            df = df_filtered
-            
-        except Exception as e:
-            print(f"Warning: Failed to load diagnosis features CSV: {e}. Disabling diagnosis features.")
-            import traceback
-            traceback.print_exc()
-            self.diagnosis_features_enabled = False
-            return
-        
-        # Create mapping: record_name -> binary_vector
-        self.diagnosis_mapping = {}
-        import ast
-        
-        for _, row in df.iterrows():
-            file_name = str(row['file_name']).strip()
-            
-            # Normalize file_name: extract last part (study_id/record_name)
-            # CSV format: "mimic-iv-ecg-.../files/p1000/p10000032/s40689238/40689238"
-            # We want: "40689238" (the record name = study_id, which is unique per ECG)
-            file_name_parts = file_name.replace('\\', '/').split('/')
-            record_name = file_name_parts[-1] if file_name_parts else None
-            
-            if not record_name:
-                continue
-            
-            # Parse diagnoses from diagnosis columns (search in order)
-            found_diagnoses = set()
-            for col in diagnosis_columns:
-                if col not in row or pd.isna(row[col]):
-                    continue
-                
-                diag_str = str(row[col]).strip()
-                if not diag_str or diag_str == '[]' or diag_str == 'nan':
-                    continue
-                
-                diagnoses = []
-                
-                # Try to parse as Python list string first (most common format)
-                diag_str_clean = diag_str.strip()
-                if diag_str_clean.startswith('[') and diag_str_clean.endswith(']'):
-                    try:
-                        parsed_list = ast.literal_eval(diag_str_clean)
-                        if isinstance(parsed_list, list):
-                            diagnoses = [str(d).strip().strip("'\"") for d in parsed_list if d]
-                    except:
-                        pass
-                
-                # If not a list, try semicolon-separated
-                if not diagnoses:
-                    diagnoses = [d.strip().strip("'\"") for d in diag_str.split(';') if d.strip()]
-                
-                # Clean and add to found_diagnoses
-                for diag in diagnoses:
-                    diag = diag.strip().strip("'\"[]")
-                    if diag and diag != 'nan' and diag != '':
-                        # Extract ICD-10 code (first part before space, if any)
-                        icd10_code = diag.split()[0] if ' ' in diag else diag
-                        icd10_code = icd10_code.strip("'\"")
-                        if icd10_code:
-                            found_diagnoses.add(icd10_code)
-            
-            # Create binary vector: 1 if diagnosis in found_diagnoses, else 0
-            binary_vector = [1 if diag_code in found_diagnoses else 0 for diag_code in self.diagnosis_list]
-            self.diagnosis_mapping[record_name] = binary_vector
-        
-        print(f"Created diagnosis mapping: {len(self.diagnosis_mapping):,} entries")
-        print(f"Diagnosis features dimension: {self.diagnosis_dim} (diagnoses: {', '.join(self.diagnosis_list)})")
-    
-    def _get_diagnosis_features(self, base_path: str) -> Optional[torch.Tensor]:
-        """Extract diagnosis features for a given base_path.
-        
-        Args:
-            base_path: ECG record base path.
-        
-        Returns:
-            Tensor of shape (diagnosis_dim,) with binary values [0 or 1] for each diagnosis,
-            or None if not found and skip strategy.
-        """
-        if not self.diagnosis_features_enabled:
-            return None
-        
-        # Extract record name from base_path (study_id, unique per ECG)
-        # base_path format: "data/icu_ecgs_24h/P1/p10000032/40689238"
-        base_path_obj = Path(base_path)
-        record_name = base_path_obj.name  # "40689238" (study_id, unique per ECG)
-        
-        # Match by record_name (study_id) - this is unique, so direct lookup
-        binary_vector = None
-        if record_name in self.diagnosis_mapping:
-            binary_vector = self.diagnosis_mapping[record_name]
-        
-        # Handle missing values
-        missing_strategy = self.diagnosis_features_config.get("missing_strategy", "zero")
-        
-        if binary_vector is None:
-            if missing_strategy == "zero":
-                binary_vector = [0] * self.diagnosis_dim
-            elif missing_strategy == "skip":
-                return None
-            else:
-                binary_vector = [0] * self.diagnosis_dim  # Default fallback
-        
-        # Convert to tensor
-        return torch.tensor(binary_vector, dtype=torch.float32)
-    
     def _load_icu_unit_features(self) -> None:
         """Load ICU unit features from icustays.csv.
         
@@ -988,6 +818,177 @@ class ECGDataset(Dataset):
             ]
         return torch.tensor(vec, dtype=torch.float32)
     
+    def _load_icu_therapy_support_features(self) -> None:
+        """Load therapy-support columns; keys match ``tabular_join_path_key`` with ``data_dir``."""
+        csv_path = self.icu_therapy_support_config.get(
+            "csv_path", "data/labeling/labels_csv/icu_therapy_support.csv"
+        )
+        path = Path(csv_path)
+        if not path.is_absolute():
+            path = _project_root() / path
+        if not path.exists():
+            print(
+                f"Warning: ICU therapy support CSV not found at {path}. "
+                "Disabling icu_therapy_support_features."
+            )
+            self.icu_therapy_support_enabled = False
+            return
+        columns = self.icu_therapy_support_config.get(
+            "columns",
+            [
+                "mech_vent",
+                "niv_hfnc",
+                "vaso_any",
+                "vaso_non_catechol_any",
+                "rrt",
+            ],
+        )
+        if isinstance(columns, str):
+            columns = [columns]
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            print(
+                f"Warning: Failed to load ICU therapy support CSV: {e}. "
+                "Disabling icu_therapy_support_features."
+            )
+            self.icu_therapy_support_enabled = False
+            return
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            print(
+                f"Warning: ICU therapy support CSV missing columns {missing}. "
+                "Disabling icu_therapy_support_features."
+            )
+            self.icu_therapy_support_enabled = False
+            return
+        if "therapy_labels_available" in df.columns:
+            ta = df["therapy_labels_available"]
+            if ta.dtype == object:
+                df = df.loc[
+                    ta.astype(str).str.lower().isin(("true", "1", "yes"))
+                ].copy()
+            else:
+                df = df.loc[ta.astype(bool)].copy()
+        self.icu_therapy_mapping = {}
+        for _, row in df.iterrows():
+            bp = row.get("base_path")
+            if pd.isna(bp):
+                continue
+            key = tabular_join_path_key(str(bp), self._data_dir)
+            vec: List[float] = []
+            skip = False
+            for col in columns:
+                v = row[col]
+                if pd.isna(v):
+                    vec.append(0.0)
+                else:
+                    try:
+                        vec.append(float(v))
+                    except (TypeError, ValueError):
+                        skip = True
+                        break
+            if skip:
+                continue
+            self.icu_therapy_mapping[key] = vec
+        self.icu_therapy_dim = len(columns)
+        print(
+            f"Loaded ICU therapy support features from {path}: "
+            f"{len(self.icu_therapy_mapping):,} rows, dim={self.icu_therapy_dim}, "
+            f"columns={columns}"
+        )
+    
+    def _get_icu_therapy_support_features(self, base_path: str) -> torch.Tensor:
+        """Therapy-support vector for ``base_path`` (zeros if missing)."""
+        if not self.icu_therapy_support_enabled or self.icu_therapy_dim == 0:
+            return torch.zeros(0, dtype=torch.float32)
+        key = tabular_join_path_key(base_path, self._data_dir)
+        vec = self.icu_therapy_mapping.get(key)
+        if vec is None:
+            vec = [0.0] * self.icu_therapy_dim
+        return torch.tensor(vec, dtype=torch.float32)
+
+    def _load_ehr_window_features(
+        self,
+        ehr_window_norm: Optional[Tuple[List[float], List[float]]],
+    ) -> None:
+        """Load EHR_feature_data.csv; keys use ``tabular_join_path_key`` like SOFA."""
+        cfg = self.ehr_window_features_config
+        self.ehr_window_features_dim = ehr_window_feature_dim(cfg)
+        if self.ehr_window_features_dim == 0:
+            self.ehr_window_features_enabled = False
+            return
+
+        csv_path = cfg.get("csv_path", "data/labeling/labels_csv/EHR_feature_data.csv")
+        path = Path(csv_path)
+        if not path.is_absolute():
+            path = _project_root() / path
+        if not path.exists():
+            print(f"Warning: EHR window CSV not found at {path}. Disabling ehr_window_features.")
+            self.ehr_window_features_enabled = False
+            self.ehr_window_features_dim = 0
+            return
+
+        required = ["urine_ml_sum", "ehr_window_hours", "platelets_worst", "platelets_n",
+                    "creatinine_worst", "creatinine_n"]
+        for name in EHR_VITAL_ORDER:
+            required.extend([f"{name}_mean", f"{name}_last"])
+            if cfg.get("include_vital_n", True):
+                required.append(f"{name}_n")
+
+        try:
+            df = pd.read_csv(path, low_memory=False)
+        except Exception as e:
+            print(f"Warning: Failed to load EHR window CSV: {e}. Disabling ehr_window_features.")
+            self.ehr_window_features_enabled = False
+            self.ehr_window_features_dim = 0
+            return
+
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            print(
+                f"Warning: EHR window CSV missing columns {missing}. "
+                "Disabling ehr_window_features."
+            )
+            self.ehr_window_features_enabled = False
+            self.ehr_window_features_dim = 0
+            return
+
+        self._ehr_raw_by_key = {}
+        for _, row in df.iterrows():
+            bp = row.get("base_path")
+            if pd.isna(bp):
+                continue
+            key = tabular_join_path_key(str(bp), self._data_dir)
+            self._ehr_raw_by_key[key] = raw_ehr_vector_from_row(row, cfg)
+
+        norm_mode = cfg.get("normalize", "zscore")
+        if norm_mode == "zscore" and ehr_window_norm is not None:
+            m, s = ehr_window_norm
+            self._ehr_norm_mean = np.asarray(m, dtype=np.float32)
+            self._ehr_norm_std = np.asarray(s, dtype=np.float32)
+        else:
+            self._ehr_norm_mean = None
+            self._ehr_norm_std = None
+
+        print(
+            f"Loaded EHR window features from {path}: {len(self._ehr_raw_by_key):,} rows, "
+            f"dim={self.ehr_window_features_dim}, normalize={norm_mode}"
+        )
+
+    def _get_ehr_window_features(self, base_path: str) -> torch.Tensor:
+        if not self.ehr_window_features_enabled or self.ehr_window_features_dim == 0:
+            return torch.zeros(0, dtype=torch.float32)
+        key = tabular_join_path_key(base_path, self._data_dir)
+        raw = self._ehr_raw_by_key.get(key)
+        if raw is None:
+            raw = np.zeros(self.ehr_window_features_dim, dtype=np.float32)
+        if self._ehr_norm_mean is not None and self._ehr_norm_std is not None:
+            out = (raw.astype(np.float32) - self._ehr_norm_mean) / self._ehr_norm_std
+        else:
+            out = raw.astype(np.float32)
+        return torch.from_numpy(out.astype(np.float32))
+    
     def _log_statistics(self) -> None:
         """Log dataset statistics after filtering."""
         total_before_filter = self.matched_count + self.unmatched_count
@@ -1013,12 +1014,20 @@ class ECGDataset(Dataset):
             
             if self.demographic_features_enabled:
                 print(f"  Demographic features: Enabled ({len(self.demographic_mapping):,} mappings)")
-            if self.diagnosis_features_enabled:
-                print(f"  Diagnosis features: Enabled ({len(self.diagnosis_mapping):,} mappings, {self.diagnosis_dim} diagnoses)")
             if self.icu_unit_features_enabled:
                 print(f"  ICU unit features: Enabled ({len(self.icu_unit_mapping):,} mappings, {self.icu_unit_dim} units)")
             if self.sofa_features_enabled:
                 print(f"  SOFA features: Enabled ({len(self.sofa_mapping):,} mappings, dim={self.sofa_features_dim})")
+            if self.icu_therapy_support_enabled:
+                print(
+                    f"  ICU therapy support features: Enabled "
+                    f"({len(self.icu_therapy_mapping):,} mappings, dim={self.icu_therapy_dim})"
+                )
+            if self.ehr_window_features_enabled:
+                print(
+                    f"  EHR window features: Enabled "
+                    f"({len(self._ehr_raw_by_key):,} mappings, dim={self.ehr_window_features_dim})"
+                )
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get item from dataset.
@@ -1095,6 +1104,22 @@ class ECGDataset(Dataset):
             if hasattr(self.transform, 'train'):
                 self.transform.train()
             signal = self.transform(signal)
+
+        rec = self.ecg_dataset.records[idx]
+        if self._mortality_balance_ts_module is not None and rec.get("mortality_ts_child") is not None:
+            if hasattr(self._mortality_balance_ts_module, "train"):
+                self._mortality_balance_ts_module.train()
+            child_id = int(rec["mortality_ts_child"])
+            digest = hashlib.blake2b(
+                f"{base_path}\0{child_id}".encode("utf-8"), digest_size=8
+            ).digest()
+            seed = int.from_bytes(digest, "little") % (2**32)
+            rng_state = np.random.get_state()
+            try:
+                np.random.seed(seed)
+                signal = self._mortality_balance_ts_module(signal)
+            finally:
+                np.random.set_state(rng_state)
         
         # Remove None values from meta (PyTorch DataLoader can't collate None)
         meta_clean = {k: v for k, v in meta.items() if v is not None}
@@ -1103,11 +1128,6 @@ class ECGDataset(Dataset):
         demographic_features = None
         if self.demographic_features_enabled:
             demographic_features = self._get_demographic_features(base_path)
-        
-        # Get diagnosis features if enabled
-        diagnosis_features = None
-        if self.diagnosis_features_enabled:
-            diagnosis_features = self._get_diagnosis_features(base_path)
         
         # Get ICU unit features if enabled
         icu_unit_features = None
@@ -1127,16 +1147,20 @@ class ECGDataset(Dataset):
         if demographic_features is not None:
             result["demographic_features"] = demographic_features
         
-        # Add diagnosis features if available
-        if diagnosis_features is not None:
-            result["diagnosis_features"] = diagnosis_features
-        
         # Add ICU unit features if available
         if icu_unit_features is not None:
             result["icu_unit_features"] = icu_unit_features
         
         if self.sofa_features_enabled and self.sofa_features_dim > 0:
             result["sofa_features"] = self._get_sofa_features(base_path)
+        
+        if self.icu_therapy_support_enabled and self.icu_therapy_dim > 0:
+            result["icu_therapy_support_features"] = (
+                self._get_icu_therapy_support_features(base_path)
+            )
+
+        if self.ehr_window_features_enabled and self.ehr_window_features_dim > 0:
+            result["ehr_window_features"] = self._get_ehr_window_features(base_path)
         
         # Sample weight for regression (only when weighting is active)
         if self.regression_weights is not None and label >= 0:

@@ -31,11 +31,11 @@ def main():
     base_config_path = Path("configs/icu_24h/output/weighted_exact_days.yaml")
     model_config_path = Path("configs/model/cnn_scratch.yaml")
     
-    # Optional: Load demographic and diagnosis features config
+    # Optional: Load demographic features config
     feature_config_path = Path("configs/features/demographic_features.yaml")
     if not feature_config_path.exists():
         feature_config_path = None
-        print("Note: Demographic features config not found. Training without Age, Sex & Diagnosis features.")
+        print("Note: Demographic features config not found. Training without Age & Sex features.")
     
     config = load_config(
         base_config_path=base_config_path,
@@ -72,12 +72,6 @@ def main():
     else:
         print(f"Demographic features: Disabled")
     
-    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
-    if diagnosis_config.get('enabled', False):
-        diagnosis_list = diagnosis_config.get('diagnosis_list', [])
-        print(f"Diagnosis features: Enabled ({len(diagnosis_list)} diagnoses)")
-    else:
-        print(f"Diagnosis features: Disabled")
     print("="*60)
     
     # Load ICU stays and create mapper

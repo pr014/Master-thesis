@@ -443,7 +443,16 @@ def create_augmentation_transform(config: Dict[str, Any]) -> Optional[Callable]:
     
     if not aug_config.get("enabled", False):
         return None
-    
+
+    mb_enabled = aug_config.get("mortality_balance_time_shuffle", {}).get("enabled", False)
+    global_ts = aug_config.get("time_segment_shuffle", False)
+    use_global_ts = bool(global_ts) and not mb_enabled
+    if mb_enabled and global_ts:
+        print(
+            "Augmentation: mortality_balance_time_shuffle.enabled=true → "
+            "global time_segment_shuffle disabled (positives use child-row shuffles only)."
+        )
+
     return ECGAugmentation(
         gaussian_noise=aug_config.get("gaussian_noise", False),
         noise_std=aug_config.get("noise_std", 0.03),
@@ -458,7 +467,7 @@ def create_augmentation_transform(config: Dict[str, Any]) -> Optional[Callable]:
         lead_dropout=aug_config.get("lead_dropout", False),
         lead_dropout_prob=aug_config.get("lead_dropout_prob", 0.1),
         sampling_rate=config.get("data", {}).get("sampling_rate", 500.0),
-        time_segment_shuffle=aug_config.get("time_segment_shuffle", False),
+        time_segment_shuffle=use_global_ts,
         time_segment_shuffle_num_segments=aug_config.get("time_segment_shuffle_num_segments", 5),
         time_segment_shuffle_p=aug_config.get("time_segment_shuffle_p", 0.5),
     )

@@ -255,10 +255,6 @@ def run_training(
     print(
         f"Demographic features: {'Enabled' if demographic_config.get('enabled', False) else 'Disabled'}"
     )
-    diagnosis_config = config.get("data", {}).get("diagnosis_features", {})
-    print(
-        f"Diagnosis features: {'Enabled' if diagnosis_config.get('enabled', False) else 'Disabled'}"
-    )
     icu_unit_config = config.get("data", {}).get("icu_unit_features", {})
     print(f"ICU unit features: {icu_unit_config.get('enabled', False)}")
     sofa_cfg = config.get("data", {}).get("sofa_features", {})

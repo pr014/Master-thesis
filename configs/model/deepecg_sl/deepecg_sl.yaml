@@ -1,6 +1,9 @@
 # DeepECG-SL (WCR) - Vollständige Konfiguration
-# Datensatz: icu_ecgs_24h/P1 | Tabular: SOFA + ICU unit + Demographics (wie Hybrid)
-# Augmentation: Gaussian noise, lead dropout, baseline wander (kein Amplitude-Scaling)
+# Features D17: 24h-ICU-ECG (data/icu_ecgs_24h/P1) | Tabular: EHR_feature_data (EHR_window) + icu_unit + demographics; SOFA / Therapy aus
+# Augmentation AG4: (1) Gaussian 3% of signal std, (2) amplitude scaling 85–115%, (3) lead dropout p=0.1/lead,
+#   (4) baseline wander 0.15–0.4 Hz, amp 0.03–0.08 (Reihenfolge in Code: Noise → Scale → Baseline → LeadDrop)
+# Kein time-segment-shuffle / mortality_balance_time_shuffle (reines AG4)
+# Training H3: Adam lr 5e-4 (backbone+head), batch 32, wd 1e-2, dropout 0.1, clip 1, scheduler factor 0.5 patience 8, min_lr 1e-6, Huber δ=1, betas [0.9,0.98], ES patience 15
 # Pretrained: lokale WCR-Gewichte WCR_77_classes (siehe model.wcr.model_name + pretrained.cache_dir)
 # WCR = Wav2Vec2 mit CMSC; Based on: https://github.com/HeartWise-AI/DeepECG_Docker
 
@@ -37,10 +40,11 @@ data:
     normalize: "zscore"
   
   augmentation:
+    # AG4 (train only)
     enabled: true
     gaussian_noise: true
-    noise_std: 0.03
-    amplitude_scaling: false
+    noise_std: 0.03   # fraction of per-lead signal std (≈ „3% of signal std“)
+    amplitude_scaling: true
     scale_min: 0.85
     scale_max: 1.15
     baseline_wander: true
@@ -50,6 +54,11 @@ data:
     bw_amp_max: 0.08
     lead_dropout: true
     lead_dropout_prob: 0.1
+    time_segment_shuffle: false
+    time_segment_shuffle_num_segments: 5
+    time_segment_shuffle_p: 0.5
+    mortality_balance_time_shuffle:
+      enabled: false
   
   demographic_features:
     enabled: true
@@ -60,42 +69,6 @@ data:
     sex_encoding: "binary"
     missing_age_strategy: "median"
     missing_sex_strategy: "default"
-  
-  diagnosis_features:
-    enabled: false
-    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
-    diagnosis_list:
-      - I10       # Essential (primary) hypertension
-      - E785      # Hyperlipidemia, unspecified
-      - I2510     # Atherosclerotic heart disease of native coronary artery without angina pectoris
-      - I4891     # Unspecified atrial fibrillation
-      - N179      # Acute kidney failure, unspecified
-      - I509      # Heart failure, unspecified
-      - Z87891    # Personal history of nicotine dependence
-      - K219      # Gastro-esophageal reflux disease without esophagitis
-      - E872      # Acidosis
-      - J9690     # Respiratory failure, unspecified, unspecified whether with hypoxia or hypercapnia
-      - D62       # Acute posthemorrhagic anemia
-      - E119      # Type 2 diabetes mellitus without complications
-      - Z7901     # Long term (current) use of anticoagulants
-      - D649      # Anemia, unspecified
-      - N390      # Urinary tract infection, site not specified
-      - R6521     # Severe sepsis with septic shock
-      - Z66       # Do not resuscitate
-      - A419      # Sepsis, unspecified organism
-      - F329      # Major depressive disorder, single episode, unspecified
-      - J189      # Pneumonia, unspecified organism
-      - I129      # Hypertensive chronic kidney disease with stage 1 through stage 4 chronic kidney disease, or unspecified chronic kidney disease
-      - E871      # Hypo-osmolality and hyponatremia
-      - N170      # Acute kidney failure with tubular necrosis
-      - Z781      # Physical restraint status
-      - E039      # Hypothyroidism, unspecified
-    diagnosis_columns:
-      - "all_diag_all"
-      - "all_diag_hosp"
-      - "hosp_diag_hosp"
-      - "ed_diag_hosp"
-    missing_strategy: "zero"
   
   icu_unit_features:
     enabled: true
@@ -115,13 +88,32 @@ data:
     missing_strategy: "most_common"
 
   sofa_features:
-    enabled: true
+    enabled: false
     csv_path: "data/labeling/labels_csv/sofa_scores.csv"
     columns:
       - sofa_total
     require_available: true
     filter_to_valid_sofa: true
     normalize: "none"
+
+  icu_therapy_support_features:
+    enabled: false
+    csv_path: "data/labeling/labels_csv/icu_therapy_support.csv"
+    columns:
+      - mech_vent
+      - niv_hfnc
+      - vaso_any
+      - vaso_non_catechol_any
+      - rrt
+    filter_to_labeled_only: true
+
+  # EHR bis t_cut (siehe EHR_feature_data.csv): Vitals mean+last[+n], Labs worst+n, Urin Summe + optional ml/h
+  ehr_window_features:
+    enabled: true
+    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
+    include_vital_n: true
+    include_urine_rate: true
+    normalize: "zscore"   # train-only mean/std; use "none" for raw values
 
 # =============================================================================
 # MODEL ARCHITECTURE
@@ -174,8 +166,10 @@ training:
   
   optimizer:
     type: "Adam"
-    lr: 5e-4
-    weight_decay: 1e-2
+    lr: 5.0e-4
+    backbone_lr: 5.0e-4
+    head_lr: 5.0e-4
+    weight_decay: 1.0e-2
     betas: [0.9, 0.98]
   
   gradient_clip_norm: 1.0

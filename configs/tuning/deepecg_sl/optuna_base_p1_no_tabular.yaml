@@ -8,9 +8,6 @@ data:
   demographic_features:
     enabled: false
 
-  diagnosis_features:
-    enabled: false
-
   icu_unit_features:
     enabled: false
 

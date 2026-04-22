@@ -31,6 +31,13 @@ optuna>=4.8.0,<5
 tqdm>=4.65.0
 pathlib2>=2.3.7; python_version < "3.4"
 
+# Optional: Streamlit clinic demo (app/clinic_app.py)
+streamlit>=1.28.0
+
 # DeepECG-SL (WCR) Dependencies
 git+https://github.com/HeartWise-AI/fairseq-signals.git
+
+# fairseq-signals still imports apply_chunking_to_forward from transformers.modeling_utils;
+# Hugging Face removed that re-export in transformers>=4.56 (use pytorch_utils instead).
+transformers>=4.28.1,<4.56.0
 

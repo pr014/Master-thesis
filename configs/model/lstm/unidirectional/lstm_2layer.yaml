@@ -46,9 +46,6 @@ data:
     enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
   
-  diagnosis_features:
-    enabled: false
-  
   icu_unit_features:
     enabled: false
     encoding: "onehot"

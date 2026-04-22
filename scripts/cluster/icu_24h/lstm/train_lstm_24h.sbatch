@@ -126,7 +126,7 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 
 # Training starten mit baseline_with_aug config
 # Das Script verwendet automatisch configs/icu_24h/baseline_with_aug.yaml
-# (LOS Regression, mit Augmentation, ohne demographic/diagnosis features)
+# (LOS Regression, mit Augmentation, ohne demographic features)
 python scripts/training/icu_24h/lstm/train_lstm_24h.py
 
 TRAINING_EXIT_CODE=$?

@@ -93,3 +93,5 @@ test/
 
 # notebooks files (local only, not tracked in Git)
 notebooks/
+
+app/

@@ -53,9 +53,6 @@ data:
     enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
   
-  diagnosis_features:
-    enabled: false
-  
   # LOS binning for oversampling rare classes
   los_binning:
     strategy: "clinical_6bin"

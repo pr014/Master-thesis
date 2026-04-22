@@ -1,7 +1,7 @@
 """Training script for LSTM1D Bidirectional with LOS regression.
 
 LOS Regression Task: Predicts continuous LOS in days (not binned classes).
-Uses data augmentation but no demographic/diagnosis features.
+Uses data augmentation but no demographic features.
 """
 
 from pathlib import Path
@@ -53,9 +53,6 @@ def main():
     
     demographic_config = config.get('data', {}).get('demographic_features', {})
     print(f"Demographic features: {demographic_config.get('enabled', False)}")
-    
-    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
-    print(f"Diagnosis features: {diagnosis_config.get('enabled', False)}")
     
     icu_unit_config = config.get('data', {}).get('icu_unit_features', {})
     print(f"ICU unit features: {icu_unit_config.get('enabled', False)}")

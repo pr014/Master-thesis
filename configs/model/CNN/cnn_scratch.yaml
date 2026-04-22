@@ -59,10 +59,6 @@ data:
   demographic_features:
     enabled: false
   
-  # Diagnosis features - DISABLED
-  diagnosis_features:
-    enabled: false
-  
   # ICU unit features - DISABLED (no late fusion labels)
   icu_unit_features:
     enabled: false

@@ -132,26 +132,18 @@ class LSTM1D_Unidirectional(BaseECGModel):
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
         
-        # Check if diagnosis features are enabled
-        diagnosis_config = data_config.get("diagnosis_features", {})
-        self.use_diagnoses = diagnosis_config.get("enabled", False)
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
-        
         # Check if ICU unit features are enabled
         icu_unit_config = data_config.get("icu_unit_features", {})
         self.use_icu_units = icu_unit_config.get("enabled", False)
         icu_unit_list = icu_unit_config.get("icu_unit_list", [])
         icu_unit_dim = len(icu_unit_list) if self.use_icu_units else 0
         
-        # Calculate feature dimension (LSTM features + optional demographic + diagnosis + ICU unit features)
+        # Calculate feature dimension (LSTM features + optional demographic + ICU unit features)
         feature_dim = lstm_output_dim
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3  # binary: [age, sex], onehot: [age, sex_0, sex_1]
             feature_dim += demo_dim
-        if self.use_diagnoses:
-            feature_dim += diagnosis_dim
         if self.use_icu_units:
             feature_dim += icu_unit_dim
         
@@ -188,7 +180,6 @@ class LSTM1D_Unidirectional(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Forward pass.
@@ -197,8 +188,6 @@ class LSTM1D_Unidirectional(BaseECGModel):
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
-            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
-                               None if diagnosis features are disabled.
             icu_unit_features: Optional tensor of shape (B, icu_unit_dim) containing one-hot ICU unit.
                               None if ICU unit features are disabled.
         
@@ -225,12 +214,10 @@ class LSTM1D_Unidirectional(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim*2)
         
-        # Late fusion: Concatenate ECG features with demographic, diagnosis, and ICU unit features
+        # Late fusion: Concatenate ECG features with demographic and ICU unit features
         fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
             fused_features = torch.cat([fused_features, demographic_features], dim=1)
-        if self.use_diagnoses and diagnosis_features is not None:
-            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         if self.use_icu_units and icu_unit_features is not None:
             fused_features = torch.cat([fused_features, icu_unit_features], dim=1)
         
@@ -245,7 +232,6 @@ class LSTM1D_Unidirectional(BaseECGModel):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Extract features before final classification head.
@@ -254,14 +240,12 @@ class LSTM1D_Unidirectional(BaseECGModel):
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
-            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
-                               None if diagnosis features are disabled.
             icu_unit_features: Optional tensor of shape (B, icu_unit_dim) containing one-hot ICU unit.
                               None if ICU unit features are disabled.
         
         Returns:
             features: Feature tensor of shape (B, feature_dim) after pooling and before fc.
-                     If demographic/diagnosis/ICU unit features are enabled, this includes them.
+                     If demographic/ICU unit features are enabled, this includes them.
         """
         # Transform input: (B, 12, 5000) → (B, 5000, 12)
         x = x.transpose(1, 2)  # (B, 5000, 12)
@@ -282,12 +266,10 @@ class LSTM1D_Unidirectional(BaseECGModel):
         # Pool LSTM output
         ecg_features = self._pool_lstm_output(lstm_output)  # (B, hidden_dim) or (B, hidden_dim*2)
         
-        # Late fusion: Concatenate ECG features with demographic, diagnosis, and ICU unit features
+        # Late fusion: Concatenate ECG features with demographic and ICU unit features
         fused_features = ecg_features
         if self.use_demographics and demographic_features is not None:
             fused_features = torch.cat([fused_features, demographic_features], dim=1)
-        if self.use_diagnoses and diagnosis_features is not None:
-            fused_features = torch.cat([fused_features, diagnosis_features], dim=1)
         if self.use_icu_units and icu_unit_features is not None:
             fused_features = torch.cat([fused_features, icu_unit_features], dim=1)
         

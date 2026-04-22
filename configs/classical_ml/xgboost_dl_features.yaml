@@ -44,10 +44,6 @@ data:
   # Demographic features (Age & Sex)
   demographic_features:
     enabled: false  # Set to true to include Age and Sex features
-  
-  # Diagnosis features (Top 15 ICD-10 codes)
-  diagnosis_features:
-    enabled: false  # Set to true to include diagnosis features
 
 # =============================================================================
 # FEATURE EXTRACTION SETTINGS
@@ -58,7 +54,6 @@ features:
   dl_model_checkpoint: "outputs/checkpoints/CNNScratch_best_3400485.pt"  # Path to trained DL model checkpoint
   dl_model_type: "CNNScratch"  # Model type: "CNNScratch", "LSTM1D", "LSTM1D_Bidirectional", "HybridCNNLSTM"
   use_demographics: false  # Include demographic features (Age, Sex)
-  use_diagnoses: false  # Include diagnosis features (Top 15 ICD-10 codes)
 
 # =============================================================================
 # MODEL ARCHITECTURE (for DL feature extraction)

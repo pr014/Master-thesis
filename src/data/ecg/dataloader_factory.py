@@ -1,7 +1,10 @@
 """Factory for creating PyTorch DataLoaders."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
+import math
 import torch
 import numpy as np
 import pandas as pd
@@ -14,6 +17,7 @@ from .ecg_dataset import (
     extract_subject_id_from_path,
     construct_ecg_time,
     tabular_join_path_key,
+    compute_ehr_zscore_stats,
 )
 from .ecg_loader import build_npy_index
 from ..labeling.icu_los_labels import los_to_bin
@@ -23,6 +27,69 @@ from .timestamp_mapping import (
     auto_detect_original_path,
     get_timestamp_mapping_path,
 )
+
+
+def expand_train_records_mortality_balance_time_shuffle(
+    train_dataset: ECGDataset,
+    config: Dict[str, Any],
+) -> None:
+    """Duplicate positive-mortality train rows as children with ``mortality_ts_child`` indices.
+
+    Each child row reuses the same ``base_path`` / ``npy_path``; ECGDataset applies one
+    deterministic time-segment shuffle per child after standard augmentation.
+
+    Controlled by ``data.augmentation.mortality_balance_time_shuffle`` (see YAML).
+    No-op when disabled or when there are no positives with label 1.
+    """
+    aug = config.get("data", {}).get("augmentation", {})
+    mb = aug.get("mortality_balance_time_shuffle", {})
+    if not mb.get("enabled", False):
+        return
+
+    records = train_dataset.ecg_dataset.records
+    mort = train_dataset.mortality_labels
+    if not records or not mort:
+        print("mortality_balance_time_shuffle: skipped (no records or no mortality labels).")
+        return
+
+    n_pos = 0
+    n_neg = 0
+    for r in records:
+        bp = r.get("base_path", "")
+        ml = mort.get(bp, -1)
+        if ml == 1:
+            n_pos += 1
+        elif ml == 0:
+            n_neg += 1
+
+    if n_pos == 0:
+        print("mortality_balance_time_shuffle: skipped (no train samples with mortality_label==1).")
+        return
+
+    c_fixed = mb.get("children_per_positive", None)
+    if c_fixed is not None:
+        c = max(0, int(c_fixed))
+    else:
+        c = max(0, math.ceil(n_neg / n_pos) - 1)
+
+    new_records: List[Dict[str, Any]] = []
+    for r in records:
+        bp = r.get("base_path", "")
+        ml = mort.get(bp, -1)
+        base = {k: v for k, v in r.items() if k != "mortality_ts_child"}
+        new_records.append(base)
+        if ml != 1 or c == 0:
+            continue
+        for k in range(c):
+            child = dict(base)
+            child["mortality_ts_child"] = k
+            new_records.append(child)
+
+    train_dataset.ecg_dataset.records = new_records
+    print(
+        f"mortality_balance_time_shuffle: enabled — train rows {len(records):,} → {len(new_records):,} "
+        f"(mortality 1: {n_pos:,}, 0: {n_neg:,}, children_per_positive={c})."
+    )
 
 
 def get_los_values_for_records(
@@ -287,6 +354,59 @@ def filter_records_to_valid_sofa(
     return out
 
 
+def filter_records_to_icu_therapy_labeled(
+    records: List[Dict[str, Any]],
+    data_config: Dict[str, Any],
+    data_dir: str,
+) -> List[Dict[str, Any]]:
+    """Keep only ECG records that have ICU therapy-support labels (optional; config-driven)."""
+    therapy_cfg = data_config.get("icu_therapy_support_features", {})
+    if not therapy_cfg.get("enabled", False):
+        return records
+    if not therapy_cfg.get("filter_to_labeled_only", True):
+        return records
+    csv_rel = therapy_cfg.get(
+        "csv_path", "data/labeling/labels_csv/icu_therapy_support.csv"
+    )
+    csv_path = Path(csv_rel)
+    if not csv_path.is_absolute():
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        csv_path = root / csv_path
+    if not csv_path.exists():
+        raise FileNotFoundError(f"ICU therapy support CSV not found: {csv_path}")
+    df = pd.read_csv(csv_path)
+    col = "therapy_labels_available"
+    if col in df.columns:
+        ta = df[col]
+        if ta.dtype == object:
+            df = df.loc[ta.astype(str).str.lower().isin(("true", "1", "yes"))].copy()
+        else:
+            df = df.loc[ta.astype(bool)].copy()
+    else:
+        print(
+            f"Warning: '{col}' missing in {csv_path}; ICU therapy cohort filter skipped "
+            "(all CSV rows used)."
+        )
+    valid_keys = set()
+    for _, row in df.iterrows():
+        bp = row.get("base_path")
+        if pd.isna(bp):
+            continue
+        valid_keys.add(tabular_join_path_key(str(bp), data_dir))
+    out: List[Dict[str, Any]] = []
+    for r in records:
+        k = tabular_join_path_key(r.get("base_path", ""), data_dir)
+        if k in valid_keys:
+            out.append(r)
+    print(f"ICU therapy support cohort filter: {len(records):,} -> {len(out):,} records")
+    if len(out) == 0:
+        raise ValueError(
+            "ICU therapy support filter removed all records; check base_path alignment "
+            "with icu_therapy_support.csv"
+        )
+    return out
+
+
 def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Custom collate function that preserves meta as a list of dicts.
     
@@ -329,25 +449,6 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     else:
         result["demographic_features"] = None
     
-    # Add diagnosis_features if present in batch
-    if "diagnosis_features" in batch[0]:
-        # Check if any sample has diagnosis features
-        diag_features_list = [item.get("diagnosis_features") for item in batch]
-        if any(df is not None for df in diag_features_list):
-            # Replace None with zeros (same shape as first non-None feature)
-            first_non_none = next(df for df in diag_features_list if df is not None)
-            diag_dim = first_non_none.shape[0]
-            diag_features_filled = [
-                df if df is not None else torch.zeros(diag_dim, dtype=torch.float32)
-                for df in diag_features_list
-            ]
-            diagnosis_features = torch.stack(diag_features_filled)
-            result["diagnosis_features"] = diagnosis_features
-        else:
-            result["diagnosis_features"] = None
-    else:
-        result["diagnosis_features"] = None
-    
     # Add icu_unit_features if present in batch
     if "icu_unit_features" in batch[0]:
         icu_features_list = [item.get("icu_unit_features") for item in batch]
@@ -379,6 +480,36 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             result["sofa_features"] = None
     else:
         result["sofa_features"] = None
+    
+    if "icu_therapy_support_features" in batch[0]:
+        th_list = [item.get("icu_therapy_support_features") for item in batch]
+        if any(f is not None for f in th_list):
+            first = next(f for f in th_list if f is not None)
+            tdim = first.shape[0]
+            filled = [
+                f if f is not None else torch.zeros(tdim, dtype=torch.float32)
+                for f in th_list
+            ]
+            result["icu_therapy_support_features"] = torch.stack(filled)
+        else:
+            result["icu_therapy_support_features"] = None
+    else:
+        result["icu_therapy_support_features"] = None
+
+    if "ehr_window_features" in batch[0]:
+        ehr_list = [item.get("ehr_window_features") for item in batch]
+        if any(f is not None for f in ehr_list):
+            first = next(f for f in ehr_list if f is not None)
+            edim = first.shape[0]
+            filled = [
+                f if f is not None else torch.zeros(edim, dtype=torch.float32)
+                for f in ehr_list
+            ]
+            result["ehr_window_features"] = torch.stack(filled)
+        else:
+            result["ehr_window_features"] = None
+    else:
+        result["ehr_window_features"] = None
     
     if "sample_weight" in batch[0]:
         result["sample_weight"] = torch.stack([item["sample_weight"] for item in batch])
@@ -731,6 +862,7 @@ def create_dataloaders(
         using_npy = False
     
     records = filter_records_to_valid_sofa(records, data_config, data_dir)
+    records = filter_records_to_icu_therapy_labeled(records, data_config, data_dir)
     
     # Load or create timestamp mapping if using .npy files
     timestamp_mapping = None
@@ -846,6 +978,15 @@ def create_dataloaders(
     # Get demographic features config if enabled
     demographic_features_config = data_config.get("demographic_features", {})
     
+    # EHR window features: train-only z-score (same stats for val/test)
+    ehr_cfg = data_config.get("ehr_window_features", {})
+    ehr_window_norm: Optional[Tuple[List[float], List[float]]] = None
+    if ehr_cfg.get("enabled", False) and ehr_cfg.get("normalize", "zscore") == "zscore":
+        project_root = Path(__file__).resolve().parents[3]
+        ehr_window_norm = compute_ehr_zscore_stats(
+            train_records, ehr_cfg, project_root, data_dir
+        )
+
     # Regression sample weighting: compute weights from train LOS distribution
     regression_weights = None
     los_binning = data_config.get("los_binning", {})
@@ -878,7 +1019,10 @@ def create_dataloaders(
         config=config,
         regression_weights=regression_weights,
         los_binning=los_binning,
+        ehr_window_norm=ehr_window_norm,
     )
+
+    expand_train_records_mortality_balance_time_shuffle(train_dataset, config)
     
     # No augmentation for validation/test (no regression weighting for eval)
     val_dataset = ECGDataset(
@@ -895,6 +1039,7 @@ def create_dataloaders(
         config=config,
         regression_weights=None,
         los_binning=None,
+        ehr_window_norm=ehr_window_norm,
     )
     
     # Oversampling: WeightedRandomSampler for rare LOS bins (when enabled)
@@ -959,6 +1104,7 @@ def create_dataloaders(
             config=config,
             regression_weights=None,
             los_binning=None,
+            ehr_window_norm=ehr_window_norm,
         )
         test_loader = DataLoader(
             test_dataset,

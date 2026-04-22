@@ -7,7 +7,7 @@ Used by scripts/scoring_models/calculate_sofa.py to restrict SOFA to ECG cohort.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 
@@ -24,6 +24,7 @@ from ...data.labeling import ICUStayMapper, load_icustays as load_labeling_icust
 def build_ecg_stay_mapping(
     timestamps_csv: Path | str,
     icustays_csv: Path | str,
+    nrows: Optional[int] = None,
 ) -> pd.DataFrame:
     """Build one row per ECG record with optional stay_id.
 
@@ -31,6 +32,7 @@ def build_ecg_stay_mapping(
         timestamps_csv: e.g. timestamps_mapping_24h_P1.csv with base_path, base_date,
             base_time, subject_id, study_id.
         icustays_csv: project icustays under labels_csv (same source as training mapper).
+        nrows: Optional limit on rows read from timestamps_csv (first nrows records).
 
     Returns:
         DataFrame with base_path, subject_id, study_id (if present), ecg_time, stay_id.
@@ -38,7 +40,7 @@ def build_ecg_stay_mapping(
     timestamps_csv = Path(timestamps_csv)
     icustays_csv = Path(icustays_csv)
 
-    ts = pd.read_csv(timestamps_csv)
+    ts = pd.read_csv(timestamps_csv, nrows=nrows)
     required = {"base_path", "base_date", "base_time", "subject_id"}
     missing = required - set(ts.columns)
     if missing:

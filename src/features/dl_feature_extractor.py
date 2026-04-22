@@ -91,7 +91,6 @@ def extract_dl_features(
     dataloader: DataLoader,
     device: str = "cpu",
     use_demographics: bool = False,
-    use_diagnoses: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Extract features from trained DL model for all samples in DataLoader.
@@ -101,7 +100,6 @@ def extract_dl_features(
         dataloader: DataLoader with ECG signals.
         device: Device to run model on (default: "cpu").
         use_demographics: Whether to include demographic features in output.
-        use_diagnoses: Whether to include diagnosis features in output.
     
     Returns:
         Tuple of (X_features, y_los, y_mortality):
@@ -124,20 +122,14 @@ def extract_dl_features(
             if mortality_labels is not None:
                 mortality_labels = mortality_labels.cpu().numpy()  # (B,)
             
-            # Get demographic and diagnosis features if available
             demographic_features = None
             if use_demographics and "demographic_features" in batch:
                 demographic_features = batch["demographic_features"].to(device)
-            
-            diagnosis_features = None
-            if use_diagnoses and "diagnosis_features" in batch:
-                diagnosis_features = batch["diagnosis_features"].to(device)
             
             # Extract features using get_features() method
             features = model.get_features(
                 signals,
                 demographic_features=demographic_features,
-                diagnosis_features=diagnosis_features,
             )  # (B, feature_dim)
             
             # Convert to numpy
@@ -190,7 +182,6 @@ def extract_dl_features_from_checkpoint(
     # Get feature config
     feature_config = config.get("features", {})
     use_demographics = feature_config.get("use_demographics", False)
-    use_diagnoses = feature_config.get("use_diagnoses", False)
     
     # Load model
     model = load_model_from_checkpoint(checkpoint_path, config, device)
@@ -201,6 +192,5 @@ def extract_dl_features_from_checkpoint(
         dataloader=dataloader,
         device=device,
         use_demographics=use_demographics,
-        use_diagnoses=use_diagnoses,
     )
 

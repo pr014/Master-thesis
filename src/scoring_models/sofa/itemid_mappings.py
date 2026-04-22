@@ -40,6 +40,46 @@ MECHANICAL_VENTILATION_ITEMIDS = [
     224701,   # ventilator mode (Hamilton)
 ]
 
+# Dialyse / CRRT (chartevents) — Kategorie „Dialysis“ in MIMIC-IV d_items.
+# Ohne Adm-History-Checkbox (z. B. 225126), um chronische von laufender RRT zu trennen.
+DIALYSIS_RRT_CHART_ITEMIDS = [
+    224144,
+    224145,
+    224149,
+    224150,
+    224151,
+    224152,
+    224153,
+    224154,
+    224191,
+    225183,
+    226457,
+    226499,
+    227290,
+    228004,
+    228005,
+    228006,
+    229247,
+    229248,
+    230083,
+    230084,
+    230085,
+    230177,
+]
+
+# NIV / BiPAP / CPAP (chartevents). Reines HFNC ohne diese Items wird in MIMIC oft
+# anders dokumentiert (z. B. Freitext „O2 Delivery Device“) und ist hier nicht enthalten.
+NIV_HFNC_CHART_ITEMIDS = [
+    225949,  # NIV Mask
+    227577,  # BiPap Mode
+    227578,  # BiPap Mask
+    227579,  # BiPap EPAP
+    227580,  # BiPap IPAP
+    227581,  # BiPap bpm (S/T -Back up)
+    227582,  # BiPap O2 Flow
+    227583,  # Autoset/CPAP
+]
+
 # =============================================================================
 # KOAGULATION - Thrombozyten
 # =============================================================================
@@ -118,6 +158,15 @@ EPINEPHRINE_ITEMIDS = [
 DOBUTAMINE_ITEMIDS = [
     221653,  # Dobutamine (Metavision) - inputevents
     30042,   # Dobutamine (CareVue) - inputevents
+]
+
+# Vasopressoren / Vasokonstriktoren ohne Katecholamine (inputevents) — nicht in vaso_any
+NON_CATECHOLAMINE_PRESSOR_INPUT_ITEMIDS = [
+    222315,  # Vasopressin
+    221749,  # Phenylephrine
+    229630,  # Phenylephrine (50/250)
+    229631,  # Phenylephrine (200/250)_OLD_1
+    229632,  # Phenylephrine (200/250)
 ]
 
 # =============================================================================
@@ -236,6 +285,23 @@ def get_all_outputevents_itemids():
     """Gibt alle itemids zurück, die aus outputevents geladen werden müssen."""
     return URINE_OUTPUT_ITEMIDS
 
+
+def get_therapy_support_chart_itemids():
+    """chartevents: Beatmung, NIV/BiPAP/CPAP, Dialyse/CRRT (pro ECG, charttime ≤ ecg_time)."""
+    return list(
+        set(
+            MECHANICAL_VENTILATION_ITEMIDS
+            + DIALYSIS_RRT_CHART_ITEMIDS
+            + NIV_HFNC_CHART_ITEMIDS
+        )
+    )
+
+
+def get_non_catecholamine_pressor_input_itemids():
+    """inputevents: Vasopressin, Phenylephrin (ohne Katecholamine in vaso_any)."""
+    return list(set(NON_CATECHOLAMINE_PRESSOR_INPUT_ITEMIDS))
+
+
 # Vasopressor Mapping (für Kategorisierung)
 VASOPRESSOR_MAPPING = {
     'dopamine': DOPAMINE_ITEMIDS,
@@ -318,6 +384,11 @@ __all__ = [
     'get_all_labevents_itemids',
     'get_all_inputevents_itemids',
     'get_all_outputevents_itemids',
+    'get_therapy_support_chart_itemids',
+    'get_non_catecholamine_pressor_input_itemids',
+    'DIALYSIS_RRT_CHART_ITEMIDS',
+    'NIV_HFNC_CHART_ITEMIDS',
+    'NON_CATECHOLAMINE_PRESSOR_INPUT_ITEMIDS',
     'validate_itemids',
 ]
 

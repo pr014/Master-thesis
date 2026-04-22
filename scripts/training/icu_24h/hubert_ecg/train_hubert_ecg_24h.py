@@ -378,9 +378,6 @@ def main():
     demographic_config = config.get('data', {}).get('demographic_features', {})
     print(f"Demographic features: {'Enabled' if demographic_config.get('enabled', False) else 'Disabled'}")
     
-    diagnosis_config = config.get('data', {}).get('diagnosis_features', {})
-    print(f"Diagnosis features: {'Enabled' if diagnosis_config.get('enabled', False) else 'Disabled'}")
-
     icu_unit_config = config.get('data', {}).get('icu_unit_features', {})
     if icu_unit_config.get('enabled', False):
         icu_list = icu_unit_config.get('icu_unit_list', [])

@@ -51,10 +51,6 @@ data:
   # Demographic features (Age & Sex)
   demographic_features:
     enabled: false  # Set to true to include Age and Sex features
-  
-  # Diagnosis features (Top 15 ICD-10 codes)
-  diagnosis_features:
-    enabled: false  # Set to true to include diagnosis features
 
 # =============================================================================
 # MULTI-TASK: MORTALITY PREDICTION
@@ -73,7 +69,6 @@ augmentation_multiplier: 2  # 2x train size = original + 1 augmented pass
 features:
   feature_type: "handcrafted"  # "handcrafted" or "dl_features"
   use_demographics: false  # Include demographic features (Age, Sex)
-  use_diagnoses: false  # Include diagnosis features (Top 15 ICD-10 codes)
 
 # =============================================================================
 # XGBOOST HYPERPARAMETERS

@@ -150,13 +150,11 @@ def _run_inference(
                 return None
 
             demo = _feat("demographic_features")
-            diag = _feat("diagnosis_features")
             icu = _feat("icu_unit_features")
 
             outputs = model(
                 signals,
                 demographic_features=demo,
-                diagnosis_features=diag,
                 icu_unit_features=icu,
             )
 

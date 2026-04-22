@@ -23,7 +23,7 @@ class HuBERT_ECG(BaseECGModel):
     - Input: (B, 12, 5000) ECG signals @ 500Hz
     - HuBERT Encoder: Pretrained Transformer with mean pooling -> (B, 768)
     - Classifier dropout (following original repo)
-    - Late Fusion: Concat([ECG(768), demographics(2), diagnoses(N)]) [optional]
+    - Late Fusion: Concat([ECG(768), demographics(2), …]) [optional]
     - LOS Head: FC(feature_dim -> 1) for regression (continuous LOS in days)
     - Mortality Head: FC(feature_dim -> 1) + Sigmoid
     
@@ -41,7 +41,6 @@ class HuBERT_ECG(BaseECGModel):
                 - model.pretrained.*: Pretrained weights configuration
                 - training.dropout_rate: Dropout rate for classifier
                 - data.demographic_features.enabled: Whether to use demographics
-                - data.diagnosis_features.enabled: Whether to use diagnoses
                 - data.task_type: "regression" (default) or "classification"
         """
         super().__init__(config)
@@ -58,15 +57,9 @@ class HuBERT_ECG(BaseECGModel):
         # HuBERT hidden_size = 768
         feature_dim = model_config.get("feature_dim", 768)
         
-        # Check demographic and diagnosis features
         data_config = config.get("data", {})
         demographic_config = data_config.get("demographic_features", {})
         self.use_demographics = demographic_config.get("enabled", False)
-        
-        diagnosis_config = data_config.get("diagnosis_features", {})
-        self.use_diagnoses = diagnosis_config.get("enabled", False)
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        diagnosis_dim = len(diagnosis_list) if self.use_diagnoses else 0
 
         icu_unit_config = data_config.get("icu_unit_features", {})
         self.use_icu_units = icu_unit_config.get("enabled", False)
@@ -93,8 +86,6 @@ class HuBERT_ECG(BaseECGModel):
             sex_encoding = demographic_config.get("sex_encoding", "binary")
             demo_dim = 2 if sex_encoding == "binary" else 3
             fused_feature_dim += demo_dim
-        if self.use_diagnoses:
-            fused_feature_dim += diagnosis_dim
         if self.use_icu_units:
             fused_feature_dim += self.icu_unit_dim
         if self.use_sofa:
@@ -133,7 +124,6 @@ class HuBERT_ECG(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -142,7 +132,6 @@ class HuBERT_ECG(BaseECGModel):
         Args:
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
-            diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU one-hot of shape (B, icu_unit_dim)
             sofa_features: Optional SOFA vector of shape (B, sofa_dim)
 
@@ -156,9 +145,6 @@ class HuBERT_ECG(BaseECGModel):
         if self.use_demographics and demographic_features is not None:
             demographic_features = demographic_features.to(x.device)
             x = torch.cat([x, demographic_features], dim=1)
-        if self.use_diagnoses and diagnosis_features is not None:
-            diagnosis_features = diagnosis_features.to(x.device)
-            x = torch.cat([x, diagnosis_features], dim=1)
         if self.use_icu_units:
             if icu_unit_features is None:
                 icu_unit_features = torch.zeros(
@@ -185,7 +171,6 @@ class HuBERT_ECG(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
@@ -194,7 +179,6 @@ class HuBERT_ECG(BaseECGModel):
         Args:
             x: ECG input tensor of shape (B, 12, 5000)
             demographic_features: Optional demographic features of shape (B, 2) or (B, 3)
-            diagnosis_features: Optional diagnosis features of shape (B, diagnosis_dim)
             icu_unit_features: Optional ICU unit one-hot
             sofa_features: Optional SOFA features
 
@@ -207,7 +191,6 @@ class HuBERT_ECG(BaseECGModel):
         features = self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
         )
@@ -226,7 +209,6 @@ class HuBERT_ECG(BaseECGModel):
         self,
         x: torch.Tensor,
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -234,7 +216,6 @@ class HuBERT_ECG(BaseECGModel):
         return self._forward_features(
             x,
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
         )

@@ -182,13 +182,7 @@ def _collect_predictions_and_meta(
                 if batch.get("demographic_features") is not None
                 else None
             )
-            diag = (
-                batch["diagnosis_features"].to(device)[valid]
-                if batch.get("diagnosis_features") is not None
-                else None
-            )
-
-            out = model(signals, demographic_features=demo, diagnosis_features=diag)
+            out = model(signals, demographic_features=demo)
             los_out = out if not isinstance(out, dict) else out.get("los", out)
             preds = (
                 (los_out.squeeze(-1) if los_out.dim() > 1 else los_out).cpu().numpy()

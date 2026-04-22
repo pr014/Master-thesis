@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 import torch
 import torch.nn as nn
 from .base_model import BaseECGModel
+from ...data.ecg.ecg_dataset import ehr_window_feature_dim
 
 
 class MultiTaskECGModel(nn.Module):
@@ -60,15 +61,6 @@ class MultiTaskECGModel(nn.Module):
             demo_dim = 2 if sex_encoding == "binary" else 3
             dummy_demographic_features = torch.zeros(1, demo_dim, device=device)
         
-        # Check if diagnosis features are enabled
-        diagnosis_config = data_config.get("diagnosis_features", {})
-        use_diagnoses = diagnosis_config.get("enabled", False)
-        diagnosis_list = diagnosis_config.get("diagnosis_list", [])
-        diagnosis_dim = len(diagnosis_list) if use_diagnoses else 0
-        dummy_diagnosis_features = None
-        if use_diagnoses:
-            dummy_diagnosis_features = torch.zeros(1, diagnosis_dim, device=device)
-        
         # Check if ICU unit features are enabled
         icu_unit_config = data_config.get("icu_unit_features", {})
         use_icu_units = icu_unit_config.get("enabled", False)
@@ -88,16 +80,47 @@ class MultiTaskECGModel(nn.Module):
         if use_sofa and sofa_dim > 0:
             dummy_sofa_features = torch.zeros(1, sofa_dim, device=device)
         self._pass_sofa_to_backbone = bool(use_sofa and sofa_dim > 0)
+
+        therapy_config = data_config.get("icu_therapy_support_features", {})
+        use_therapy = therapy_config.get("enabled", False)
+        therapy_columns = therapy_config.get(
+            "columns",
+            [
+                "mech_vent",
+                "niv_hfnc",
+                "vaso_any",
+                "vaso_non_catechol_any",
+                "rrt",
+            ],
+        )
+        if isinstance(therapy_columns, str):
+            therapy_columns = [therapy_columns]
+        therapy_dim = len(therapy_columns) if use_therapy else 0
+        dummy_icu_therapy_features = None
+        if use_therapy and therapy_dim > 0:
+            dummy_icu_therapy_features = torch.zeros(1, therapy_dim, device=device)
+        self._pass_icu_therapy_to_backbone = bool(use_therapy and therapy_dim > 0)
+
+        ehr_cfg = data_config.get("ehr_window_features", {})
+        use_ehr = ehr_cfg.get("enabled", False)
+        ehr_dim = ehr_window_feature_dim(ehr_cfg) if use_ehr else 0
+        dummy_ehr_features = None
+        if use_ehr and ehr_dim > 0:
+            dummy_ehr_features = torch.zeros(1, ehr_dim, device=device)
+        self._pass_ehr_window_to_backbone = bool(use_ehr and ehr_dim > 0)
         
         with torch.no_grad():
             try:
                 _gf_kw = dict(
                     demographic_features=dummy_demographic_features,
-                    diagnosis_features=dummy_diagnosis_features,
                     icu_unit_features=dummy_icu_unit_features,
                 )
                 if self._pass_sofa_to_backbone:
                     _gf_kw["sofa_features"] = dummy_sofa_features
+                if self._pass_icu_therapy_to_backbone:
+                    _gf_kw["icu_therapy_support_features"] = dummy_icu_therapy_features
+                if self._pass_ehr_window_to_backbone:
+                    _gf_kw["ehr_window_features"] = dummy_ehr_features
                 features = base_model.get_features(dummy_input, **_gf_kw)
                 feature_dim = features.shape[1]
             except NotImplementedError:
@@ -127,9 +150,10 @@ class MultiTaskECGModel(nn.Module):
         self, 
         x: torch.Tensor, 
         demographic_features: Optional[torch.Tensor] = None,
-        diagnosis_features: Optional[torch.Tensor] = None,
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
+        icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Forward pass through multi-task model.
         
@@ -137,8 +161,6 @@ class MultiTaskECGModel(nn.Module):
             x: Input tensor of shape (B, 12, 5000)
             demographic_features: Optional tensor of shape (B, 2) or (B, 3) containing Age & Sex.
                                  None if demographic features are disabled.
-            diagnosis_features: Optional tensor of shape (B, diagnosis_dim) containing binary diagnosis features.
-                               None if diagnosis features are disabled.
             icu_unit_features: Optional tensor of shape (B, icu_unit_dim) containing one-hot ICU unit.
                               None if ICU unit features are disabled.
         
@@ -147,14 +169,17 @@ class MultiTaskECGModel(nn.Module):
                 - 'los': LOS regression output of shape (B, 1) - continuous LOS in days
                 - 'mortality': Mortality probabilities of shape (B, 1) in range [0, 1]
         """
-        # Extract features using base model (includes demographic, diagnosis, and ICU unit features if enabled)
+        # Extract features using base model (includes demographic and ICU unit features if enabled)
         _gf_kw = dict(
             demographic_features=demographic_features,
-            diagnosis_features=diagnosis_features,
             icu_unit_features=icu_unit_features,
         )
         if getattr(self, "_pass_sofa_to_backbone", False):
             _gf_kw["sofa_features"] = sofa_features
+        if getattr(self, "_pass_icu_therapy_to_backbone", False):
+            _gf_kw["icu_therapy_support_features"] = icu_therapy_support_features
+        if getattr(self, "_pass_ehr_window_to_backbone", False):
+            _gf_kw["ehr_window_features"] = ehr_window_features
         features = self.base_model.get_features(x, **_gf_kw)  # (B, feature_dim)
         
         # LOS regression head

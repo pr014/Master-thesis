@@ -13,18 +13,24 @@ from .callbacks import EarlyStopping, ModelCheckpoint
 def _forward_aux_kwargs(
     config: Dict[str, Any],
     demographic_features: Optional[torch.Tensor],
-    diagnosis_features: Optional[torch.Tensor],
     icu_unit_features: Optional[torch.Tensor],
     sofa_features: Optional[torch.Tensor],
+    icu_therapy_support_features: Optional[torch.Tensor],
+    ehr_window_features: Optional[torch.Tensor],
 ) -> Dict[str, Any]:
-    """Keyword args for model forward; SOFA only if enabled (avoids TypeError on other architectures)."""
+    """Keyword args for model forward; optional tabular tensors only if enabled in config."""
     kw: Dict[str, Any] = {
         "demographic_features": demographic_features,
-        "diagnosis_features": diagnosis_features,
         "icu_unit_features": icu_unit_features,
     }
     if config.get("data", {}).get("sofa_features", {}).get("enabled", False):
         kw["sofa_features"] = sofa_features
+    if config.get("data", {}).get("icu_therapy_support_features", {}).get(
+        "enabled", False
+    ):
+        kw["icu_therapy_support_features"] = icu_therapy_support_features
+    if config.get("data", {}).get("ehr_window_features", {}).get("enabled", False):
+        kw["ehr_window_features"] = ehr_window_features
     return kw
 
 
@@ -170,14 +176,6 @@ def train_epoch(
                 # Filter demographic features to match valid_mask
                 demographic_features = demographic_features[valid_mask]
         
-        # Get diagnosis features if available
-        diagnosis_features = None
-        if "diagnosis_features" in batch and batch["diagnosis_features"] is not None:
-            diagnosis_features = batch["diagnosis_features"].to(device)
-            if valid_mask.any():
-                # Filter diagnosis features to match valid_mask
-                diagnosis_features = diagnosis_features[valid_mask]
-        
         # Get ICU unit features if available
         icu_unit_features = None
         if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
@@ -191,6 +189,25 @@ def train_epoch(
             if valid_mask.any():
                 sofa_features = sofa_features[valid_mask]
         
+        icu_therapy_support_features = None
+        if (
+            "icu_therapy_support_features" in batch
+            and batch["icu_therapy_support_features"] is not None
+        ):
+            icu_therapy_support_features = batch["icu_therapy_support_features"].to(
+                device
+            )
+            if valid_mask.any():
+                icu_therapy_support_features = icu_therapy_support_features[
+                    valid_mask
+                ]
+
+        ehr_window_features = None
+        if "ehr_window_features" in batch and batch["ehr_window_features"] is not None:
+            ehr_window_features = batch["ehr_window_features"].to(device)
+            if valid_mask.any():
+                ehr_window_features = ehr_window_features[valid_mask]
+        
         # Forward pass
         optimizer.zero_grad()
         outputs = model(
@@ -198,9 +215,10 @@ def train_epoch(
             **_forward_aux_kwargs(
                 config,
                 demographic_features,
-                diagnosis_features,
                 icu_unit_features,
                 sofa_features,
+                icu_therapy_support_features,
+                ehr_window_features,
             ),
         )
         
@@ -389,12 +407,6 @@ def validate_epoch(
                 demographic_features = batch["demographic_features"].to(device)
                 demographic_features = demographic_features[valid_mask]
             
-            # Get diagnosis features if available
-            diagnosis_features = None
-            if "diagnosis_features" in batch and batch["diagnosis_features"] is not None:
-                diagnosis_features = batch["diagnosis_features"].to(device)
-                diagnosis_features = diagnosis_features[valid_mask]
-            
             # Get ICU unit features if available
             icu_unit_features = None
             if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
@@ -406,15 +418,33 @@ def validate_epoch(
                 sofa_features = batch["sofa_features"].to(device)
                 sofa_features = sofa_features[valid_mask]
             
+            icu_therapy_support_features = None
+            if (
+                "icu_therapy_support_features" in batch
+                and batch["icu_therapy_support_features"] is not None
+            ):
+                icu_therapy_support_features = batch[
+                    "icu_therapy_support_features"
+                ].to(device)
+                icu_therapy_support_features = icu_therapy_support_features[
+                    valid_mask
+                ]
+
+            ehr_window_features = None
+            if "ehr_window_features" in batch and batch["ehr_window_features"] is not None:
+                ehr_window_features = batch["ehr_window_features"].to(device)
+                ehr_window_features = ehr_window_features[valid_mask]
+            
             # Forward pass
             outputs = model(
                 signals,
                 **_forward_aux_kwargs(
                     cfg,
                     demographic_features,
-                    diagnosis_features,
                     icu_unit_features,
                     sofa_features,
+                    icu_therapy_support_features,
+                    ehr_window_features,
                 ),
             )
             
@@ -655,12 +685,6 @@ def evaluate_with_detailed_metrics(
                 demographic_features = batch["demographic_features"].to(device)
                 demographic_features = demographic_features[valid_mask]
             
-            # Get diagnosis features if available
-            diagnosis_features = None
-            if "diagnosis_features" in batch and batch["diagnosis_features"] is not None:
-                diagnosis_features = batch["diagnosis_features"].to(device)
-                diagnosis_features = diagnosis_features[valid_mask]
-            
             # Get ICU unit features if available
             icu_unit_features = None
             if "icu_unit_features" in batch and batch["icu_unit_features"] is not None:
@@ -672,15 +696,33 @@ def evaluate_with_detailed_metrics(
                 sofa_features = batch["sofa_features"].to(device)
                 sofa_features = sofa_features[valid_mask]
             
+            icu_therapy_support_features = None
+            if (
+                "icu_therapy_support_features" in batch
+                and batch["icu_therapy_support_features"] is not None
+            ):
+                icu_therapy_support_features = batch[
+                    "icu_therapy_support_features"
+                ].to(device)
+                icu_therapy_support_features = icu_therapy_support_features[
+                    valid_mask
+                ]
+
+            ehr_window_features = None
+            if "ehr_window_features" in batch and batch["ehr_window_features"] is not None:
+                ehr_window_features = batch["ehr_window_features"].to(device)
+                ehr_window_features = ehr_window_features[valid_mask]
+            
             # Forward pass
             outputs = model(
                 signals,
                 **_forward_aux_kwargs(
                     cfg,
                     demographic_features,
-                    diagnosis_features,
                     icu_unit_features,
                     sofa_features,
+                    icu_therapy_support_features,
+                    ehr_window_features,
                 ),
             )
             

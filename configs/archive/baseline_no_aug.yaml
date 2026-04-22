@@ -54,10 +54,6 @@ data:
   # Demographic features (Age & Sex) - DISABLED for baseline
   demographic_features:
     enabled: false
-  
-  # Diagnosis features - DISABLED for baseline
-  diagnosis_features:
-    enabled: false
 
 # Training hyperparameters (same for all models for fair comparison)
 training:
