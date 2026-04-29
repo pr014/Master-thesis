@@ -18,6 +18,7 @@ python scripts/analysis/results/bland_altman.py --job 3346714 --out /tmp/ba.png
 from __future__ import annotations
 
 import argparse
+import inspect
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.data.ecg import create_dataloaders
 from src.data.ecg.ecg_dataset import construct_ecg_time
 from src.data.labeling import load_icustays, ICUStayMapper, load_mortality_mapping
+from src.training.train_loop import _forward_aux_kwargs
 from src.utils.config_loader import load_config
 
 
@@ -158,14 +160,27 @@ def _setup_icu_mapper(config: dict) -> ICUStayMapper:
 # Inference: collect predictions + recording day metadata
 # ---------------------------------------------------------------------------
 
+def _los_tensor_from_output(out):
+    if isinstance(out, dict):
+        return out.get("los", out)
+    if isinstance(out, (tuple, list)):
+        return out[0]
+    return out
+
+
 def _collect_predictions_and_meta(
-    model, test_loader, device: torch.device, icu_mapper: ICUStayMapper
+    model,
+    test_loader,
+    device: torch.device,
+    icu_mapper: ICUStayMapper,
+    config: dict,
 ) -> pd.DataFrame:
     stay_id_to_intime = pd.Series(
         icu_mapper.icustays_df.set_index("stay_id")["intime"]
     )
     rows = []
     model.eval()
+    fwd_params = inspect.signature(model.forward).parameters
     with torch.no_grad():
         for batch in test_loader:
             signals = batch["signal"].to(device)
@@ -177,13 +192,35 @@ def _collect_predictions_and_meta(
             signals, labels = signals[valid], labels[valid]
             meta_list = [m for m, v in zip(meta_list, valid) if v]
 
-            demo = (
-                batch["demographic_features"].to(device)[valid]
-                if batch.get("demographic_features") is not None
-                else None
+            demographic_features = None
+            if batch.get("demographic_features") is not None:
+                demographic_features = batch["demographic_features"].to(device)[valid]
+            icu_unit_features = None
+            if batch.get("icu_unit_features") is not None:
+                icu_unit_features = batch["icu_unit_features"].to(device)[valid]
+            sofa_features = None
+            if batch.get("sofa_features") is not None:
+                sofa_features = batch["sofa_features"].to(device)[valid]
+            icu_therapy_support_features = None
+            if batch.get("icu_therapy_support_features") is not None:
+                icu_therapy_support_features = batch["icu_therapy_support_features"].to(
+                    device
+                )[valid]
+            ehr_window_features = None
+            if batch.get("ehr_window_features") is not None:
+                ehr_window_features = batch["ehr_window_features"].to(device)[valid]
+
+            aux = _forward_aux_kwargs(
+                config,
+                demographic_features,
+                icu_unit_features,
+                sofa_features,
+                icu_therapy_support_features,
+                ehr_window_features,
             )
-            out = model(signals, demographic_features=demo)
-            los_out = out if not isinstance(out, dict) else out.get("los", out)
+            aux = {k: v for k, v in aux.items() if k in fwd_params}
+            out = model(signals, **aux)
+            los_out = _los_tensor_from_output(out)
             preds = (
                 (los_out.squeeze(-1) if los_out.dim() > 1 else los_out).cpu().numpy()
             )
@@ -356,7 +393,7 @@ def main() -> None:
     model = _build_model(config, checkpoint_path, device)
 
     print("Running inference on test set...")
-    df = _collect_predictions_and_meta(model, test_loader, device, icu_mapper)
+    df = _collect_predictions_and_meta(model, test_loader, device, icu_mapper, config)
     print(f"Test ECGs: {len(df)}, with recording day: {df['recording_day'].notna().sum()}")
 
     _plot_bland_altman(df, job_id, out_path)

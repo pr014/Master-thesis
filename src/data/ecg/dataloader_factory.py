@@ -510,7 +510,7 @@ def custom_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             result["ehr_window_features"] = None
     else:
         result["ehr_window_features"] = None
-    
+
     if "sample_weight" in batch[0]:
         result["sample_weight"] = torch.stack([item["sample_weight"] for item in batch])
     

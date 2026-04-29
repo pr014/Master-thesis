@@ -1,7 +1,8 @@
 """Base trainer class for model training."""
 
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+import optuna
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -25,6 +26,7 @@ class Trainer:
         config: Dict[str, Any],
         device: Optional[torch.device] = None,
         criterion: Optional[nn.Module] = None,
+        optuna_trial: Optional[Any] = None,
     ):
         """Initialize trainer.
         
@@ -35,6 +37,8 @@ class Trainer:
             config: Configuration dictionary.
             device: Device to train on (auto-detected if None).
             criterion: Optional loss function (if None, will be created from config).
+            optuna_trial: Optional active Optuna trial; when set, reports `val_los_mae` each val epoch
+                and may raise :class:`optuna.TrialPruned` for pruners (e.g. MedianPruner).
         """
         self.model = model
         self.train_loader = train_loader
@@ -88,6 +92,8 @@ class Trainer:
         self.logger = setup_logger("training", log_dir=log_dir)
         self.tb_logger = TensorBoardLogger(log_dir / "tensorboard") if log_config.get("use_tensorboard", True) else None
         
+        self.optuna_trial = optuna_trial
+
         # Training state
         self.current_epoch = 0
         self.history = {
@@ -290,6 +296,16 @@ class Trainer:
                     self.history[key].append(value)
                 else:
                     self.history[key] = [value]
+
+            if self.optuna_trial is not None and val_metrics:
+                mae = val_metrics.get("val_los_mae")
+                if mae is not None:
+                    # Same intermediate metric as Optuna HPO objective (minimize val LOS MAE).
+                    self.optuna_trial.report(float(mae), step=epoch - 1)
+                if self.optuna_trial.should_prune():
+                    self.logger.info(f"Optuna TrialPruned at epoch {epoch} (val_los_mae reported)")
+                    print(f"Optuna TrialPruned at epoch {epoch}")
+                    raise optuna.TrialPruned()
             
             # Logging
             if epoch % log_frequency == 0 or epoch == 1:

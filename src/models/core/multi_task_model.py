@@ -108,7 +108,7 @@ class MultiTaskECGModel(nn.Module):
         if use_ehr and ehr_dim > 0:
             dummy_ehr_features = torch.zeros(1, ehr_dim, device=device)
         self._pass_ehr_window_to_backbone = bool(use_ehr and ehr_dim > 0)
-        
+
         with torch.no_grad():
             try:
                 _gf_kw = dict(

@@ -41,8 +41,13 @@ def run_training(
     sweep_id: Optional[str] = None,
     resume_from: Optional[Path] = None,
     print_parameter_debug: bool = True,
+    optuna_trial: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Run Hybrid CNN-LSTM training + test eval; return metrics for Optuna/logging."""
+    """Run Hybrid CNN-LSTM training + test eval; return metrics for Optuna/logging.
+    
+    If ``optuna_trial`` is set (HPO with a pruner), :class:`optuna.TrialPruned` may be
+    raised from the training loop after intermediate ``val_los_mae`` reports.
+    """
     _ = print_parameter_debug  # Interface parity with other train scripts.
 
     config = load_config(
@@ -153,6 +158,7 @@ def run_training(
         val_loader=val_loader,
         config=config,
         criterion=criterion,  # Pass custom criterion if multi-task
+        optuna_trial=optuna_trial,
     )
 
     # Store config paths for checkpoint saving

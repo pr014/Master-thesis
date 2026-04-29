@@ -2,7 +2,7 @@
 #SBATCH --job-name=optuna_hybrid_cnn_lstm
 #SBATCH --output=outputs/logs/slurm_optuna_hybrid_%j.out
 #SBATCH --error=outputs/logs/slurm_optuna_hybrid_%j.err
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -14,14 +14,12 @@
 
 # Optuna worker for Hybrid CNN-LSTM. Set before sbatch, e.g.:
 #   export OPTUNA_STORAGE="postgresql://user:pass@host:5432/optuna"
-#   export OPTUNA_STUDY_NAME="hybrid_cnn_lstm_p1_v1"
-#   export N_TRIALS_PER_JOB=1
+#   export OPTUNA_STUDY_NAME="hybrid_cnn_lstm_v1"
+#   export N_TRIALS_PER_JOB=100
 # Or submit many workers in one go (same pattern as manual DeepECG runs):
 #   ./scripts/cluster/icu_24h/hybrid_cnn_lstm/launch_optuna_hybrid_workers.sh
 # Optional: fixed date folder for artifacts (default: today)
 #   export OPTUNA_OUTPUT_DATE="2026-04-03"
-# Wide hyperparameter search (new study name recommended):
-#   export OPTUNA_HYBRID_SEARCH_SPACE=p2
 # Trial YAMLs + exports: outputs/tuning/hybrid_cnn_lstm/${OPTUNA_OUTPUT_DATE:-<today>}/${OPTUNA_STUDY_NAME}/
 # Prefer PostgreSQL for many parallel jobs; avoid SQLite on shared NFS with heavy concurrency.
 
@@ -93,17 +91,11 @@ if [ -n "${OPTUNA_OUTPUT_DATE:-}" ]; then
   OUTPUT_DATE_ARGS+=(--output-date "${OPTUNA_OUTPUT_DATE}")
 fi
 
-SEARCH_SPACE_ARGS=()
-if [ -n "${OPTUNA_HYBRID_SEARCH_SPACE:-}" ]; then
-  SEARCH_SPACE_ARGS+=(--search-space "${OPTUNA_HYBRID_SEARCH_SPACE}")
-fi
-
 python scripts/tuning/optuna_hybrid_cnn_lstm_worker.py \
     --storage "${OPTUNA_STORAGE}" \
     --study-name "${OPTUNA_STUDY_NAME}" \
     --n-trials "${N_TRIALS}" \
     "${OUTPUT_DATE_ARGS[@]}" \
-    "${SEARCH_SPACE_ARGS[@]}" \
     "${EXTRA[@]}" \
     "$@"
 

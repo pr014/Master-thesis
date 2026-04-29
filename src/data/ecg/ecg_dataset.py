@@ -87,27 +87,60 @@ def tabular_join_path_key(base_path: str, data_dir: Optional[str]) -> str:
     return raw.as_posix()
 
 
-# --- EHR window aggregates (EHR_feature_data.csv), same join key as SOFA/therapy ---
+# --- EHR late-fusion features from EHR_feature_data.csv ---
 
-EHR_VITAL_ORDER = [
-    "heart_rate",
-    "respiratory_rate",
-    "oxygen_saturation",
-    "map",
-    "sbp",
-    "dbp",
-    "temperature",
+DEFAULT_EHR_METADATA_COLUMNS = [
+    "base_path",
+    "study_id",
+    "subject_id",
+    "ecg_time",
+    "stay_id",
+    "stay_intime",
+    "hadm_id",
+    "t_cut",
 ]
+
+
+def _resolve_ehr_csv_path(cfg: Dict[str, Any], project_root: Path) -> Path:
+    csv_path = cfg.get("csv_path", "data/labeling/labels_csv/EHR_feature_data.csv")
+    path = Path(csv_path)
+    if not path.is_absolute():
+        path = project_root / path
+    return path
+
+
+def get_ehr_feature_columns(
+    cfg: Dict[str, Any],
+    project_root: Optional[Path] = None,
+) -> List[str]:
+    """Resolve feature columns from the full EHR CSV, excluding metadata columns."""
+    if not cfg.get("enabled", False):
+        return []
+    root = project_root or _project_root()
+    path = _resolve_ehr_csv_path(cfg, root)
+    if not path.exists():
+        raise FileNotFoundError(f"EHR feature CSV not found: {path}")
+
+    df = pd.read_csv(path, nrows=0)
+    if "base_path" not in df.columns:
+        raise ValueError("EHR CSV must contain base_path")
+
+    include_columns = cfg.get("include_columns")
+    if include_columns:
+        columns = [str(col) for col in include_columns]
+        missing = [col for col in columns if col not in df.columns]
+        if missing:
+            raise ValueError(f"EHR CSV missing requested include_columns: {missing}")
+        return columns
+
+    excluded = set(DEFAULT_EHR_METADATA_COLUMNS)
+    excluded.update(str(col) for col in cfg.get("exclude_columns", []))
+    return [str(col) for col in df.columns if str(col) not in excluded]
 
 
 def ehr_window_feature_dim(cfg: Dict[str, Any]) -> int:
     """Length of the late-fusion vector for ``data.ehr_window_features``."""
-    if not cfg.get("enabled", False):
-        return 0
-    per_vital = 2 + (1 if cfg.get("include_vital_n", True) else 0)
-    n = len(EHR_VITAL_ORDER) * per_vital + 4  # platelets/creatinine worst+n
-    n += 1 + (1 if cfg.get("include_urine_rate", True) else 0)  # sum + optional rate
-    return n
+    return len(get_ehr_feature_columns(cfg))
 
 
 def _ehr_safe_float(x: Any) -> float:
@@ -120,25 +153,9 @@ def _ehr_safe_float(x: Any) -> float:
         return 0.0
 
 
-def raw_ehr_vector_from_row(row: pd.Series, cfg: Dict[str, Any]) -> np.ndarray:
-    """Raw numeric vector (no z-score) from one EHR CSV row."""
-    include_n = bool(cfg.get("include_vital_n", True))
-    include_urine_rate = bool(cfg.get("include_urine_rate", True))
-    parts: List[float] = []
-    for name in EHR_VITAL_ORDER:
-        parts.append(_ehr_safe_float(row.get(f"{name}_mean")))
-        parts.append(_ehr_safe_float(row.get(f"{name}_last")))
-        if include_n:
-            parts.append(_ehr_safe_float(row.get(f"{name}_n")))
-    parts.append(_ehr_safe_float(row.get("platelets_worst")))
-    parts.append(_ehr_safe_float(row.get("platelets_n")))
-    parts.append(_ehr_safe_float(row.get("creatinine_worst")))
-    parts.append(_ehr_safe_float(row.get("creatinine_n")))
-    urine = _ehr_safe_float(row.get("urine_ml_sum"))
-    parts.append(urine)
-    if include_urine_rate:
-        hrs = _ehr_safe_float(row.get("ehr_window_hours"))
-        parts.append(urine / hrs if hrs > 1e-6 else 0.0)
+def raw_ehr_vector_from_row(row: pd.Series, feature_columns: List[str]) -> np.ndarray:
+    """Raw numeric vector (no z-score) from one full EHR CSV row."""
+    parts = [_ehr_safe_float(row.get(col)) for col in feature_columns]
     return np.asarray(parts, dtype=np.float32)
 
 
@@ -149,16 +166,14 @@ def compute_ehr_zscore_stats(
     data_dir: Optional[str],
 ) -> Tuple[List[float], List[float]]:
     """Column-wise mean/std on train rows present in the EHR CSV (train-only normalization)."""
-    csv_path = cfg.get("csv_path", "data/labeling/labels_csv/EHR_feature_data.csv")
-    path = Path(csv_path)
-    if not path.is_absolute():
-        path = project_root / path
+    path = _resolve_ehr_csv_path(cfg, project_root)
     if not path.exists():
         raise FileNotFoundError(f"EHR feature CSV not found: {path}")
 
     df = pd.read_csv(path, low_memory=False)
     if "base_path" not in df.columns:
         raise ValueError("EHR CSV must contain base_path")
+    feature_columns = get_ehr_feature_columns(cfg, project_root)
 
     train_keys = {
         tabular_join_path_key(str(r.get("base_path", "")), data_dir)
@@ -174,9 +189,9 @@ def compute_ehr_zscore_stats(
         key = tabular_join_path_key(str(bp), data_dir)
         if key not in train_keys:
             continue
-        mats.append(raw_ehr_vector_from_row(row, cfg))
+        mats.append(raw_ehr_vector_from_row(row, feature_columns))
 
-    dim = ehr_window_feature_dim(cfg)
+    dim = len(feature_columns)
     if not mats:
         return [0.0] * dim, [1.0] * dim
 
@@ -306,6 +321,7 @@ class ECGDataset(Dataset):
             "enabled", False
         )
         self._ehr_raw_by_key: Dict[str, np.ndarray] = {}
+        self._ehr_feature_columns: List[str] = []
         self.ehr_window_features_dim = 0
         self._ehr_norm_mean: Optional[np.ndarray] = None
         self._ehr_norm_std: Optional[np.ndarray] = None
@@ -912,29 +928,14 @@ class ECGDataset(Dataset):
         self,
         ehr_window_norm: Optional[Tuple[List[float], List[float]]],
     ) -> None:
-        """Load EHR_feature_data.csv; keys use ``tabular_join_path_key`` like SOFA."""
+        """Load the full EHR_feature_data.csv as a late-fusion vector."""
         cfg = self.ehr_window_features_config
-        self.ehr_window_features_dim = ehr_window_feature_dim(cfg)
-        if self.ehr_window_features_dim == 0:
-            self.ehr_window_features_enabled = False
-            return
-
-        csv_path = cfg.get("csv_path", "data/labeling/labels_csv/EHR_feature_data.csv")
-        path = Path(csv_path)
-        if not path.is_absolute():
-            path = _project_root() / path
+        path = _resolve_ehr_csv_path(cfg, _project_root())
         if not path.exists():
             print(f"Warning: EHR window CSV not found at {path}. Disabling ehr_window_features.")
             self.ehr_window_features_enabled = False
             self.ehr_window_features_dim = 0
             return
-
-        required = ["urine_ml_sum", "ehr_window_hours", "platelets_worst", "platelets_n",
-                    "creatinine_worst", "creatinine_n"]
-        for name in EHR_VITAL_ORDER:
-            required.extend([f"{name}_mean", f"{name}_last"])
-            if cfg.get("include_vital_n", True):
-                required.append(f"{name}_n")
 
         try:
             df = pd.read_csv(path, low_memory=False)
@@ -944,14 +945,20 @@ class ECGDataset(Dataset):
             self.ehr_window_features_dim = 0
             return
 
-        missing = [c for c in required if c not in df.columns]
-        if missing:
+        try:
+            self._ehr_feature_columns = get_ehr_feature_columns(cfg)
+        except Exception as e:
             print(
-                f"Warning: EHR window CSV missing columns {missing}. "
+                f"Warning: Could not resolve EHR feature columns: {e}. "
                 "Disabling ehr_window_features."
             )
             self.ehr_window_features_enabled = False
             self.ehr_window_features_dim = 0
+            return
+        self.ehr_window_features_dim = len(self._ehr_feature_columns)
+        if self.ehr_window_features_dim == 0:
+            print("Warning: No EHR feature columns selected. Disabling ehr_window_features.")
+            self.ehr_window_features_enabled = False
             return
 
         self._ehr_raw_by_key = {}
@@ -960,7 +967,9 @@ class ECGDataset(Dataset):
             if pd.isna(bp):
                 continue
             key = tabular_join_path_key(str(bp), self._data_dir)
-            self._ehr_raw_by_key[key] = raw_ehr_vector_from_row(row, cfg)
+            self._ehr_raw_by_key[key] = raw_ehr_vector_from_row(
+                row, self._ehr_feature_columns
+            )
 
         norm_mode = cfg.get("normalize", "zscore")
         if norm_mode == "zscore" and ehr_window_norm is not None:
@@ -973,7 +982,8 @@ class ECGDataset(Dataset):
 
         print(
             f"Loaded EHR window features from {path}: {len(self._ehr_raw_by_key):,} rows, "
-            f"dim={self.ehr_window_features_dim}, normalize={norm_mode}"
+            f"dim={self.ehr_window_features_dim}, normalize={norm_mode}, "
+            f"columns={self._ehr_feature_columns}"
         )
 
     def _get_ehr_window_features(self, base_path: str) -> torch.Tensor:
@@ -988,7 +998,7 @@ class ECGDataset(Dataset):
         else:
             out = raw.astype(np.float32)
         return torch.from_numpy(out.astype(np.float32))
-    
+
     def _log_statistics(self) -> None:
         """Log dataset statistics after filtering."""
         total_before_filter = self.matched_count + self.unmatched_count

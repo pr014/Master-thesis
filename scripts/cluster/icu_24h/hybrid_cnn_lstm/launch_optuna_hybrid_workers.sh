@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Launch many Optuna worker jobs for Hybrid CNN-LSTM (same env pattern as DeepECG optuna_deepecg_sl_worker.sbatch).
+# Launch the Hybrid CNN-LSTM Optuna tuning job.
 #
 # Usage (from repo root, after: chmod +x .../launch_optuna_hybrid_workers.sh):
 #   ./scripts/cluster/icu_24h/hybrid_cnn_lstm/launch_optuna_hybrid_workers.sh
 #
 # Optional overrides (export before running):
 #   OPTUNA_OUTPUT_DATE=2026-04-03          # default: today (YYYY-MM-DD)
-#   OPTUNA_STUDY_NAME=my_study             # default: p1 -> hybrid_cnn_lstm_hpo_p1_tab_<YYYYMMDD>; p2 -> ..._p2_tab_<YYYYMMDD>
-#   OPTUNA_HYBRID_SEARCH_SPACE=p2          # default: unset -> p1 narrow; p2 = wide (worker default base YAML: tabular features ON)
-#   NUM_JOBS=25                            # default: 25 parallel workers (each 1 trial)
-#   N_TRIALS_PER_JOB=1                     # default: 1 (recommended for parallel)
+#   OPTUNA_STUDY_NAME=my_study             # default: hybrid_cnn_lstm_hpo_tab_<YYYYMMDD>
+#   NUM_JOBS=1                             # default: 1 worker/job id
+#   N_TRIALS_PER_JOB=100                   # default: 100 trials in that one job
 #   OPTUNA_EXPORT_CSV=0                    # default: 1 (same as DeepECG); use 0 to skip per-job CSV races on NFS+SQLite
 #   DRY_RUN=1                              # print what would be submitted, do not sbatch
 #
@@ -17,7 +16,8 @@
 #   outputs/tuning/hybrid_cnn_lstm/${OPTUNA_OUTPUT_DATE}/${OPTUNA_STUDY_NAME}/
 #     storage/optuna.db
 #     trial_configs/
-#     exports/optuna_trials.csv            # written by each worker if OPTUNA_EXPORT_CSV=1 (last writer wins)
+#     exports/optuna_trials.csv            # all trials, written if OPTUNA_EXPORT_CSV=1
+#     exports/optuna_best_trial.csv        # best trial params + stored metrics, written if OPTUNA_EXPORT_CSV=1
 #
 # SQLite on shared NFS + many writers: prefer PostgreSQL for OPTUNA_STORAGE if you see DB lock issues.
 # Parallel workers must not all call create_study on an empty DB at once (SQLAlchemy CREATE TABLE race).
@@ -33,14 +33,10 @@ unset OPTUNA_HYBRID_SMOKE_OBJECTIVE || true
 OPTUNA_OUTPUT_DATE="${OPTUNA_OUTPUT_DATE:-$(date +%F)}"
 DATE_COMPACT="${OPTUNA_OUTPUT_DATE//-/}"
 if [[ -z "${OPTUNA_STUDY_NAME:-}" ]]; then
-  if [[ "${OPTUNA_HYBRID_SEARCH_SPACE:-}" == "p2" ]]; then
-    OPTUNA_STUDY_NAME="hybrid_cnn_lstm_hpo_p2_tab_${DATE_COMPACT}"
-  else
-    OPTUNA_STUDY_NAME="hybrid_cnn_lstm_hpo_p1_tab_${DATE_COMPACT}"
-  fi
+  OPTUNA_STUDY_NAME="hybrid_cnn_lstm_hpo_tab_${DATE_COMPACT}"
 fi
-NUM_JOBS="${NUM_JOBS:-25}"
-N_TRIALS_PER_JOB="${N_TRIALS_PER_JOB:-1}"
+NUM_JOBS="${NUM_JOBS:-1}"
+N_TRIALS_PER_JOB="${N_TRIALS_PER_JOB:-100}"
 OPTUNA_EXPORT_CSV="${OPTUNA_EXPORT_CSV:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -57,7 +53,6 @@ export OPTUNA_STUDY_NAME
 export OPTUNA_STORAGE
 export N_TRIALS_PER_JOB
 export OPTUNA_EXPORT_CSV
-export OPTUNA_HYBRID_SEARCH_SPACE="${OPTUNA_HYBRID_SEARCH_SPACE:-}"
 
 JOB_LIST="${STUDY_DIR}/submitted_sbatch_job_ids.txt"
 : > "${JOB_LIST}"
@@ -66,7 +61,6 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 echo "OPTUNA_OUTPUT_DATE=${OPTUNA_OUTPUT_DATE}"
 echo "OPTUNA_STUDY_NAME=${OPTUNA_STUDY_NAME}"
 echo "OPTUNA_STORAGE=${OPTUNA_STORAGE}"
-echo "OPTUNA_HYBRID_SEARCH_SPACE=${OPTUNA_HYBRID_SEARCH_SPACE:-<unset -> p1>}"
 echo "NUM_JOBS=${NUM_JOBS}  N_TRIALS_PER_JOB=${N_TRIALS_PER_JOB}  OPTUNA_EXPORT_CSV=${OPTUNA_EXPORT_CSV}"
 echo "STUDY_DIR=${STUDY_DIR}"
 echo "Job IDs will be appended to: ${JOB_LIST}"
@@ -89,7 +83,16 @@ fi
 case "${OPTUNA_STORAGE}" in
   sqlite:///*)
     echo "Initializing Optuna SQLite study/schema once (avoids parallel CREATE TABLE race)..."
-    "${PYTHON_BIN}" -c "import optuna; optuna.create_study(study_name='${OPTUNA_STUDY_NAME}', storage='${OPTUNA_STORAGE}', direction='minimize', load_if_exists=True)"
+    echo "  (same TPESampler + MedianPruner as optuna_hybrid_cnn_lstm_worker — see scripts/tuning/hybrid_cnn_lstm_study_config.py)"
+    "${PYTHON_BIN}" -c "
+import sys
+from pathlib import Path
+root = Path('${PROJECT_ROOT}')
+sys.path[:0] = [str(root / 'scripts' / 'tuning')]
+import hybrid_cnn_lstm_study_config as c
+c.create_hybrid_study(study_name='${OPTUNA_STUDY_NAME}', storage='${OPTUNA_STORAGE}')
+print(' ', c.study_config_summary())
+"
     ;;
 esac
 
@@ -103,4 +106,4 @@ done
 
 echo "Done. Submitted ${NUM_JOBS} jobs."
 echo "Monitor: squeue -u \"\$USER\""
-echo "After completion, check study dir and exports/optuna_trials.csv (or re-export from DB if you used OPTUNA_EXPORT_CSV=0)."
+echo "After completion, check study dir and exports/optuna_trials.csv plus exports/optuna_best_trial.csv."

@@ -1,7 +1,7 @@
 # Hybrid CNN-LSTM - Vollständige Konfiguration
 # Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
 #
-# Diese Variante: Datensatz P1 | Augmentation AG6 | Demografie + ICU-Unit (Late Fusion).
+# Diese Variante: Datensatz P1 | Augmentation AG6 | alle tabularen Features aus (nur ECG).
 #
 # AG6: Gaussian Noise 3% der Signal-Std, Lead Dropout p=0.1 pro Ableitung, Baseline-Wander
 #      0.15–0.4 Hz, Amplitude 0.03–0.08 (kein Amplitude-Scaling).
@@ -73,7 +73,7 @@ data:
       # children_per_positive: 10
   
   demographic_features:
-    enabled: true
+    enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
     age_normalization: "minmax"
     age_min: 0
@@ -83,7 +83,7 @@ data:
     missing_sex_strategy: "default"
   
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     # Top-10 first_careunit by ICU stay count (same list as configs/features/icu_unit_features.yaml, DeepECG-SL, LSTM)
     icu_unit_list:
@@ -119,6 +119,20 @@ data:
       - vaso_non_catechol_any
       - rrt
     filter_to_labeled_only: true
+
+  # Kleine EHR-Tabelle als Late-Fusion-Features; Metadaten/IDs werden ausgeschlossen
+  ehr_window_features:
+    enabled: false
+    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
+    exclude_columns:
+      - "study_id"
+      - "subject_id"
+      - "ecg_time"
+      - "stay_id"
+      - "stay_intime"
+      - "hadm_id"
+      - "t_cut"
+    normalize: "zscore"
 
 # =============================================================================
 # MODEL ARCHITECTURE

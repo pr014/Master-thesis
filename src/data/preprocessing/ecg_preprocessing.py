@@ -73,14 +73,14 @@ def apply_bandpass_filter(
     nyquist = fs / 2.0
     low = lowcut / nyquist
     high = highcut / nyquist
-    
+
     # Ensure frequencies are within valid range [0, 1]
     low = max(0.0, min(low, 1.0))
     high = max(0.0, min(high, 1.0))
-    
+
     if low >= high:
         raise ValueError(f"Invalid frequency range: lowcut={lowcut} Hz, highcut={highcut} Hz (nyquist={nyquist} Hz)")
-    
+
     b, a = scipy_signal.butter(order, [low, high], btype='band')
     
     # Apply filtfilt (zero-phase filtering) to each lead

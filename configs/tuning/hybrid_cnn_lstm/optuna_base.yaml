@@ -1,0 +1,60 @@
+# Optuna tuning base override for Hybrid CNN-LSTM
+# Merged on top of configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm.yaml.
+#
+# Precedence (important):
+#   1) Model YAML is loaded first in training.
+#   2) This file (as part of the per-trial experiment YAML) is merged second and
+#      overrides the model YAML on conflicts — everything you set here wins over the model.
+#   3) Trial overrides from optuna_hybrid_cnn_lstm_worker merge on top of this file;
+#      only keys those overrides touch can supersede this base (nested merge).
+#
+# Single tuning setup:
+#   - P1 dataset
+#   - demographics
+#   - ICU unit one-hot
+#   - full EHR_feature_data.csv window features
+#   - AG6 augmentation: gaussian noise, lead dropout, baseline wander
+#   - fixed training horizon/loss/early stopping
+
+training:
+  num_epochs: 200
+  loss:
+    type: mse
+
+early_stopping:
+  patience: 15
+
+data:
+  data_dir: "data/icu_ecgs_24h/P1"
+
+  demographic_features:
+    enabled: true
+
+  icu_unit_features:
+    enabled: true
+
+  sofa_features:
+    enabled: false
+
+  icu_therapy_support_features:
+    enabled: false
+
+  ehr_window_features:
+    enabled: true
+    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
+    exclude_columns:
+      - "base_path"
+      - "study_id"
+      - "subject_id"
+      - "ecg_time"
+      - "stay_id"
+      - "stay_intime"
+      - "hadm_id"
+      - "t_cut"
+    normalize: "zscore"
+
+  augmentation:
+    enabled: true
+    gaussian_noise: true
+    lead_dropout: true
+    baseline_wander: true

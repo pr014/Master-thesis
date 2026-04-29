@@ -21,7 +21,7 @@ class DeepECG_SL(BaseECGModel):
     - Input Adapter: Conv1D (5000 → 2500)
     - WCR Encoder: Pretrained Transformer (2500 → seq_len, 768)
     - Global Pooling: (seq_len, 768) → (768)
-    - Late Fusion: Concat([ECG(768), demographics, ICU unit, SOFA, therapy support])
+    - Late Fusion: Concat([ECG(768), demographics, ICU unit, SOFA, therapy support, EHR])
     - Shared Layers: BN → Dropout → FC(770+N → 128) → ReLU → Dropout
     - LOS Head: FC(128 → 1) for regression (continuous LOS in days)
     - Mortality Head: FC(128 → 1) + Sigmoid

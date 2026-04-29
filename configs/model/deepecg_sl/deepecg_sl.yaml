@@ -1,8 +1,8 @@
 # DeepECG-SL (WCR) - Vollständige Konfiguration
-# Features D17: 24h-ICU-ECG (data/icu_ecgs_24h/P1) | Tabular: EHR_feature_data (EHR_window) + icu_unit + demographics; SOFA / Therapy aus
-# Augmentation AG4: (1) Gaussian 3% of signal std, (2) amplitude scaling 85–115%, (3) lead dropout p=0.1/lead,
-#   (4) baseline wander 0.15–0.4 Hz, amp 0.03–0.08 (Reihenfolge in Code: Noise → Scale → Baseline → LeadDrop)
-# Kein time-segment-shuffle / mortality_balance_time_shuffle (reines AG4)
+# Features D17: 24h-ICU-ECG (data/icu_ecgs_24h/P1) | Tabular: komplette EHR_feature_data.csv + icu_unit + demographics; SOFA / Therapy aus
+# Augmentation AG6: (1) Gaussian 3% of signal std, (2) lead dropout p=0.1/lead,
+#   (3) baseline wander 0.15–0.4 Hz, amp 0.03–0.08; kein amplitude scaling
+# Kein time-segment-shuffle / mortality_balance_time_shuffle (reines AG6)
 # Training H3: Adam lr 5e-4 (backbone+head), batch 32, wd 1e-2, dropout 0.1, clip 1, scheduler factor 0.5 patience 8, min_lr 1e-6, Huber δ=1, betas [0.9,0.98], ES patience 15
 # Pretrained: lokale WCR-Gewichte WCR_77_classes (siehe model.wcr.model_name + pretrained.cache_dir)
 # WCR = Wav2Vec2 mit CMSC; Based on: https://github.com/HeartWise-AI/DeepECG_Docker
@@ -40,11 +40,11 @@ data:
     normalize: "zscore"
   
   augmentation:
-    # AG4 (train only)
+    # AG6 (train only)
     enabled: true
     gaussian_noise: true
     noise_std: 0.03   # fraction of per-lead signal std (≈ „3% of signal std“)
-    amplitude_scaling: true
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
     baseline_wander: true
@@ -107,12 +107,18 @@ data:
       - rrt
     filter_to_labeled_only: true
 
-  # EHR bis t_cut (siehe EHR_feature_data.csv): Vitals mean+last[+n], Labs worst+n, Urin Summe + optional ml/h
+  # Kleine EHR-Tabelle als Late-Fusion-Features; Metadaten/IDs werden ausgeschlossen
   ehr_window_features:
     enabled: true
-    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
-    include_vital_n: true
-    include_urine_rate: true
+    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
+    exclude_columns:
+      - "study_id"
+      - "subject_id"
+      - "ecg_time"
+      - "stay_id"
+      - "stay_intime"
+      - "hadm_id"
+      - "t_cut"
     normalize: "zscore"   # train-only mean/std; use "none" for raw values
 
 # =============================================================================

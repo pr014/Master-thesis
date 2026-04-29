@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from ..core.base_model import BaseECGModel
+from ...data.ecg.ecg_dataset import ehr_window_feature_dim
 
 
 class HybridCNNLSTM(BaseECGModel):
@@ -18,7 +19,7 @@ class HybridCNNLSTM(BaseECGModel):
       * Layer 2: 128 per direction → 256 output (input is 256 from Layer 1)
       * Dropout between layers (default: 0.2)
     - Pooling: Mean pooling (uses all timesteps, recommended) or last/max
-    - Late fusion with demographics, ICU unit, SOFA, and therapy-support flags (optional)
+    - Late fusion with demographics, ICU unit, SOFA, therapy-support flags, and EHR features (optional)
     - Shared layer: BN → Dropout → Dense(64) → ReLU → Dropout
     - Output: LOS prediction (B, 1) for regression or (B, num_classes) for classification
     
@@ -180,6 +181,12 @@ class HybridCNNLSTM(BaseECGModel):
             len(therapy_columns) if self.use_icu_therapy_support else 0
         )
 
+        ehr_cfg = data_config.get("ehr_window_features", {})
+        self.use_ehr_window = ehr_cfg.get("enabled", False)
+        self.ehr_window_dim = (
+            ehr_window_feature_dim(ehr_cfg) if self.use_ehr_window else 0
+        )
+
         feature_dim = lstm_output_dim
         if self.use_demographics:
             sex_encoding = demographic_config.get("sex_encoding", "binary")
@@ -191,6 +198,8 @@ class HybridCNNLSTM(BaseECGModel):
             feature_dim += self.sofa_dim
         if self.use_icu_therapy_support:
             feature_dim += self.icu_therapy_support_dim
+        if self.use_ehr_window:
+            feature_dim += self.ehr_window_dim
 
         # Shared layer
         self.bn_final = nn.BatchNorm1d(feature_dim)
@@ -253,6 +262,7 @@ class HybridCNNLSTM(BaseECGModel):
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
         icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
         apply_lstm_dropout: bool = False
     ) -> torch.Tensor:
         # CNN blocks
@@ -309,6 +319,17 @@ class HybridCNNLSTM(BaseECGModel):
             fused_features = torch.cat(
                 [fused_features, icu_therapy_support_features], dim=1
             )
+        if self.use_ehr_window:
+            if ehr_window_features is None:
+                ehr_window_features = torch.zeros(
+                    fused_features.shape[0],
+                    self.ehr_window_dim,
+                    device=fused_features.device,
+                    dtype=fused_features.dtype,
+                )
+            else:
+                ehr_window_features = ehr_window_features.to(fused_features.device)
+            fused_features = torch.cat([fused_features, ehr_window_features], dim=1)
 
         # Shared layer
         x = self.bn_final(fused_features)
@@ -326,6 +347,7 @@ class HybridCNNLSTM(BaseECGModel):
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
         icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Forward pass returning LOS prediction.
         
@@ -341,6 +363,7 @@ class HybridCNNLSTM(BaseECGModel):
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
             icu_therapy_support_features=icu_therapy_support_features,
+            ehr_window_features=ehr_window_features,
             apply_lstm_dropout=False  # No dropout between LSTM layers in forward (like Bidirectional LSTM)
         )
         return self.fc_los(features)
@@ -352,6 +375,7 @@ class HybridCNNLSTM(BaseECGModel):
         icu_unit_features: Optional[torch.Tensor] = None,
         sofa_features: Optional[torch.Tensor] = None,
         icu_therapy_support_features: Optional[torch.Tensor] = None,
+        ehr_window_features: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Extract features before final LOS head.
         
@@ -367,5 +391,6 @@ class HybridCNNLSTM(BaseECGModel):
             icu_unit_features=icu_unit_features,
             sofa_features=sofa_features,
             icu_therapy_support_features=icu_therapy_support_features,
+            ehr_window_features=ehr_window_features,
             apply_lstm_dropout=True  # Apply dropout between LSTM layers in get_features (like Bidirectional LSTM)
         )

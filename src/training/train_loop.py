@@ -207,7 +207,7 @@ def train_epoch(
             ehr_window_features = batch["ehr_window_features"].to(device)
             if valid_mask.any():
                 ehr_window_features = ehr_window_features[valid_mask]
-        
+
         # Forward pass
         optimizer.zero_grad()
         outputs = model(
@@ -434,7 +434,7 @@ def validate_epoch(
             if "ehr_window_features" in batch and batch["ehr_window_features"] is not None:
                 ehr_window_features = batch["ehr_window_features"].to(device)
                 ehr_window_features = ehr_window_features[valid_mask]
-            
+
             # Forward pass
             outputs = model(
                 signals,
@@ -712,7 +712,7 @@ def evaluate_with_detailed_metrics(
             if "ehr_window_features" in batch and batch["ehr_window_features"] is not None:
                 ehr_window_features = batch["ehr_window_features"].to(device)
                 ehr_window_features = ehr_window_features[valid_mask]
-            
+
             # Forward pass
             outputs = model(
                 signals,
