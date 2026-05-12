@@ -1,6 +1,8 @@
-# LSTM1D Bidirectional (1-Layer) - Vollständige Konfiguration
+# LSTM1D Bidirectional (1-Layer) — Studienzeile A4 (bidirect. LSTM)
 # Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
 # Improved architecture with mean pooling, embedding, and dropout
+#
+# Gemeinsam mit allen Architekturen: P1, D1, AG1 | H1: Studientabelle „BI-LSTM“
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -38,7 +40,8 @@ data:
     enabled: true
     gaussian_noise: true
     noise_std: 0.03
-    amplitude_scaling: true
+    # AG1: nur Gauß-Rauschen (kein Amplitude Scaling)
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
   
@@ -61,10 +64,10 @@ model:
   # Hidden dimension: 128 per direction → 256 total
   # ~300K parameters (1 layer) - ~1.3x unidirectional (232K for 2-layer)
   
-  hidden_dim: 128  # Hidden dimension per direction (forward + backward = 256 total)
-  num_layers: 1  # Number of LSTM layers
-  lstm_dropout: 0.2  # Dropout between LSTM layers (for future 2-layer usage)
-  bidirectional: true  # Bidirectional LSTM (enforced in model)
+  hidden_dim: 128
+  num_layers: 1
+  lstm_dropout: 0.2
+  bidirectional: true
   
   # Pooling Strategy
   pooling: "mean"
@@ -85,8 +88,8 @@ training:
   
   optimizer:
     type: "Adam"
-    lr: 5e-4
-    weight_decay: 1e-4
+    lr: 5.0e-4
+    weight_decay: 1.0e-4
     betas: [0.9, 0.999]
   
   gradient_clip_norm: 1.0
@@ -96,12 +99,10 @@ training:
     type: "ReduceLROnPlateau"
     factor: 0.1
     patience: 5
-    min_lr: 1e-6
+    min_lr: 1.0e-6
   
   loss:
     type: "mse"
-    weighted: true
-    method: "balanced"
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -150,6 +151,7 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
+  mortality_test_threshold_mode: fixed_0_5
 
 # =============================================================================
 # MULTI-TASK LEARNING

@@ -71,10 +71,11 @@ class HuBERTEncoder(nn.Module):
         # Resolve cache directory path (relative to project root)
         # Path: src/models/hubert_ecg/encoder.py -> parent.parent.parent.parent = MA-thesis-1/
         cache_dir_path = Path(cache_dir)
+        project_root_path = Path(__file__).parent.parent.parent.parent  # MA-thesis-1/
         if not cache_dir_path.is_absolute():
-            project_root_path = Path(__file__).parent.parent.parent.parent  # src/../../../.. = MA-thesis-1/
             cache_dir_path = project_root_path / cache_dir
-        
+        cache_dir_path = cache_dir_path.resolve()
+
         # Resolve checkpoint path
         checkpoint_path_obj = Path(checkpoint_path) if checkpoint_path else None
         if checkpoint_path_obj:
@@ -84,6 +85,26 @@ class HuBERTEncoder(nn.Module):
                     checkpoint_path_obj = cache_dir_path / checkpoint_filename
             else:
                 checkpoint_path_obj = cache_dir_path / checkpoint_path
+
+        # Common local layout: weights under data/pretrained_weights/base/
+        if (
+            checkpoint_path_obj
+            and checkpoint_path
+            and not checkpoint_path_obj.exists()
+        ):
+            fname = Path(checkpoint_path).name
+            for alt in (
+                project_root_path / "data" / "pretrained_weights" / "base",
+                project_root_path / "data" / "pretrained_weights" / "Hubert_ECG" / "base",
+            ):
+                alt = alt.resolve()
+                cand = alt / fname
+                if cand.is_file():
+                    checkpoint_path_obj = cand
+                    if (alt / "config.json").is_file():
+                        cache_dir_path = alt
+                    print(f"HuBERT: resolved pretrained file to {checkpoint_path_obj} (dir={alt})")
+                    break
         
         # Determine device
         if device is None:
@@ -101,6 +122,17 @@ class HuBERTEncoder(nn.Module):
         else:
             # Default: look for config.json in cache directory
             config_path_obj = cache_dir_path / "config.json"
+
+        if config_path_obj and not config_path_obj.is_file():
+            for alt in (
+                project_root_path / "data" / "pretrained_weights" / "base",
+                project_root_path / "data" / "pretrained_weights" / "Hubert_ECG" / "base",
+            ):
+                alt_cfg = (alt.resolve() / "config.json")
+                if alt_cfg.is_file():
+                    config_path_obj = alt_cfg
+                    print(f"HuBERT: using config from fallback: {config_path_obj}")
+                    break
         
         if config_path_obj and config_path_obj.exists():
             import json

@@ -1,10 +1,12 @@
-# DeepECG-SL (WCR) - Vollständige Konfiguration
-# Features D17: 24h-ICU-ECG (data/icu_ecgs_24h/P1) | Tabular: komplette EHR_feature_data.csv + icu_unit + demographics; SOFA / Therapy aus
-# Augmentation AG6: (1) Gaussian 3% of signal std, (2) lead dropout p=0.1/lead,
-#   (3) baseline wander 0.15–0.4 Hz, amp 0.03–0.08; kein amplitude scaling
-# Kein time-segment-shuffle / mortality_balance_time_shuffle (reines AG6)
-# Training H3: Adam lr 5e-4 (backbone+head), batch 32, wd 1e-2, dropout 0.1, clip 1, scheduler factor 0.5 patience 8, min_lr 1e-6, Huber δ=1, betas [0.9,0.98], ES patience 15
-# Pretrained: lokale WCR-Gewichte WCR_77_classes (siehe model.wcr.model_name + pretrained.cache_dir)
+# DeepECG-SL (WCR) — Studienzeile A6.1 | Gewichte: wcr_77_classes | H1 (Studientabelle)
+#
+# Gemeinsam mit allen Architekturen: P1, D1, AG1
+# - Pretrained: cache_dir + model.wcr.model_name (wcr_77_classes)
+# - Train-Skript: nur Phase 2 = volles Fine-Tuning (Encoder + Köpfe, siehe train_deepecg_sl_24h.py)
+# - H1: Adam lr 5e-4 (Backbone/Köpfe), batch 64, wd 1e-4, dropout 0.3, ReduceLROnPlateau factor 0.1 patience 5,
+#       min_lr 1e-6, ES patience 7, LOS-MSE; shared_dim 256; d_model 768
+#
+# Pretrained: cache_dir + model.wcr.model_name (wcr_77_classes / WCR_77_classes, siehe wcr_encoder.py)
 # WCR = Wav2Vec2 mit CMSC; Based on: https://github.com/HeartWise-AI/DeepECG_Docker
 
 # =============================================================================
@@ -40,19 +42,19 @@ data:
     normalize: "zscore"
   
   augmentation:
-    # AG6 (train only)
+    # AG1 (train only): nur Gauß-Rauschen
     enabled: true
     gaussian_noise: true
     noise_std: 0.03   # fraction of per-lead signal std (≈ „3% of signal std“)
     amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
-    baseline_wander: true
+    baseline_wander: false
     bw_freq_min: 0.15
     bw_freq_max: 0.4
     bw_amp_min: 0.03
     bw_amp_max: 0.08
-    lead_dropout: true
+    lead_dropout: false
     lead_dropout_prob: 0.1
     time_segment_shuffle: false
     time_segment_shuffle_num_segments: 5
@@ -61,7 +63,7 @@ data:
       enabled: false
   
   demographic_features:
-    enabled: true
+    enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
     age_normalization: "minmax"
     age_min: 0
@@ -71,7 +73,7 @@ data:
     missing_sex_strategy: "default"
   
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     icu_unit_list:
       - "Medical Intensive Care Unit (MICU)"
@@ -107,9 +109,8 @@ data:
       - rrt
     filter_to_labeled_only: true
 
-  # Kleine EHR-Tabelle als Late-Fusion-Features; Metadaten/IDs werden ausgeschlossen
   ehr_window_features:
-    enabled: true
+    enabled: false
     csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
     exclude_columns:
       - "study_id"
@@ -135,10 +136,10 @@ model:
   # - 12 Transformer encoder layers with embed_dim=768
   wcr:
     # Lokaler Pfad: cache_dir/WCR_77_classes.pt + base_ssl.pt ODER cache_dir/WCR_77_classes/base_ssl.pt + Checkpoint-.pt
-    model_name: "WCR_77_classes"
+    model_name: "wcr_77_classes"
     base_ssl_path: "base_ssl.pt"
     d_model: 768                    # Transformer encoder embed dimension (from checkpoint)
-    freeze_backbone: false          # Full fine-tuning: gesamtes Modell + Demographics
+    freeze_backbone: false          # Phase 1/2: siehe DeepECG_SL_Trainer
     
   # Input Adapter Configuration
   # WCR expects (B, 12, 2500) input format
@@ -164,9 +165,8 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 32
-  # Phase-2 fine-tuning reads this as max_epochs (see train_deepecg_sl_24h.run_training).
-  num_epochs: 30
+  batch_size: 64
+  num_epochs: 50
   num_workers: 4
   pin_memory: true
   
@@ -175,22 +175,21 @@ training:
     lr: 5.0e-4
     backbone_lr: 5.0e-4
     head_lr: 5.0e-4
-    weight_decay: 1.0e-2
-    betas: [0.9, 0.98]
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-6
   
   gradient_clip_norm: 1.0
-  dropout_rate: 0.1
+  dropout_rate: 0.3
   
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.5
-    patience: 8
-    min_lr: 1e-6
+    factor: 0.1
+    patience: 5
+    min_lr: 1.0e-6
   
   loss:
-    type: "huber"
-    delta: 1.0
-    weighted: false
+    type: "mse"
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -208,7 +207,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 15
+  patience: 7
   monitor: "val_loss"
   mode: "min"
 
@@ -239,6 +238,7 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
+  mortality_test_threshold_mode: fixed_0_5
 
 # =============================================================================
 # MULTI-TASK LEARNING

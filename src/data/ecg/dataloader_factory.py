@@ -826,7 +826,7 @@ def create_dataloaders(
     window_seconds = data_config.get("window_seconds", 10.0)
     
     # Get task type and split strategy (only temporal split supported)
-    task_type = data_config.get("task_type", "regression")
+    task_type = data_config.get("task_type") or data_config.get("los_task", "regression")
     split_strategy = data_config.get("split_strategy", "temporal_stratified")
     
     # Only temporal splits are supported

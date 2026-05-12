@@ -635,6 +635,9 @@ def evaluate_with_detailed_metrics(
         - mortality_recall: Overall recall
         - mortality_f1: Overall F1-score
         - mortality_auc: Overall AUC
+        - mortality_auc_leq10: Mortality AUC restricted to stays with true LOS ≤ 10 days
+          (undefined / omitted if only one class in that subgroup)
+        - mortality_n_stays_leq10: Stays with valid mortality label and true LOS ≤ 10 days
     """
     try:
         from sklearn.metrics import (
@@ -856,11 +859,16 @@ def evaluate_with_detailed_metrics(
         mse_leq10 = float(((preds_leq10 - labels_leq10) ** 2).mean())
         rmse_leq10 = float(np.sqrt(mse_leq10))
         median_ae_leq10 = float(np.median(ae_leq10))
+        p25_leq10 = float(np.percentile(ae_leq10, 25))
+        p50_leq10 = float(np.percentile(ae_leq10, 50))
+        p75_leq10 = float(np.percentile(ae_leq10, 75))
+        p90_leq10 = float(np.percentile(ae_leq10, 90))
         ss_res_leq10 = ((labels_leq10 - preds_leq10) ** 2).sum()
         ss_tot_leq10 = ((labels_leq10 - labels_leq10.mean()) ** 2).sum()
         r2_leq10 = float(1 - ss_res_leq10 / ss_tot_leq10) if ss_tot_leq10 > 0 else 0.0
     else:
         mae_leq10 = rmse_leq10 = mse_leq10 = median_ae_leq10 = r2_leq10 = 0.0
+        p25_leq10 = p50_leq10 = p75_leq10 = p90_leq10 = 0.0
 
     # Build result dictionary with LOS metrics
     result = {
@@ -880,6 +888,10 @@ def evaluate_with_detailed_metrics(
         "los_rmse_leq10": rmse_leq10,
         "los_r2_leq10": r2_leq10,
         "los_median_ae_leq10": median_ae_leq10,
+        "los_p25_error_leq10": p25_leq10,
+        "los_p50_error_leq10": p50_leq10,
+        "los_p75_error_leq10": p75_leq10,
+        "los_p90_error_leq10": p90_leq10,
         "los_n_leq10": n_leq10,
     }
     
@@ -888,23 +900,31 @@ def evaluate_with_detailed_metrics(
         # Aggregate mortality probs per stay
         stay_aggregated_mortality_probs = []
         stay_aggregated_mortality_labels = []
-        
+        stay_true_los_for_mortality = []
+
         for stay_id in stay_mortality_probs:
             if stay_id in stay_mortality_labels:
                 aggregated = np.mean(stay_mortality_probs[stay_id])
                 stay_aggregated_mortality_probs.append(aggregated)
                 stay_aggregated_mortality_labels.append(stay_mortality_labels[stay_id])
-        
+                stay_true_los_for_mortality.append(
+                    float(stay_los_labels[stay_id])
+                    if stay_id in stay_los_labels
+                    else float("nan")
+                )
+
         if stay_aggregated_mortality_probs:
             mortality_probs_np = np.array(stay_aggregated_mortality_probs)
             mortality_labels_np = np.array(stay_aggregated_mortality_labels)
-            
+            los_for_mortality_np = np.asarray(stay_true_los_for_mortality, dtype=float)
+
             # Filter valid mortality labels
             valid_mortality_mask = mortality_labels_np >= 0
             if valid_mortality_mask.any():
                 mortality_probs_valid = mortality_probs_np[valid_mortality_mask]
                 mortality_labels_valid = mortality_labels_np[valid_mortality_mask]
-                
+                los_for_mortality_valid = los_for_mortality_np[valid_mortality_mask]
+
                 # Overall mortality metrics
                 mortality_preds = (mortality_probs_valid >= mortality_threshold).astype(int)
                 mortality_accuracy = (mortality_preds == mortality_labels_valid).mean()
@@ -919,6 +939,21 @@ def evaluate_with_detailed_metrics(
                         mortality_auc = 0.0
                 except ValueError:
                     mortality_auc = 0.0
+
+                # Mortality AUC on subgroup: true stay LOS ≤ 10 days (same stay-level aggregation)
+                mask_mort_leq10 = np.isfinite(los_for_mortality_valid) & (
+                    los_for_mortality_valid <= 10.0
+                )
+                n_mort_leq10 = int(mask_mort_leq10.sum())
+                mortality_auc_leq10: Optional[float] = None
+                if n_mort_leq10 > 0:
+                    sub_labs = mortality_labels_valid[mask_mort_leq10]
+                    sub_probs = mortality_probs_valid[mask_mort_leq10]
+                    if len(np.unique(sub_labs)) > 1:
+                        try:
+                            mortality_auc_leq10 = float(roc_auc_score(sub_labs, sub_probs))
+                        except ValueError:
+                            mortality_auc_leq10 = None
                 
                 result.update({
                     "mortality_accuracy": float(mortality_accuracy),
@@ -927,6 +962,8 @@ def evaluate_with_detailed_metrics(
                     "mortality_f1": float(mortality_f1),
                     "mortality_auc": float(mortality_auc),
                     "mortality_threshold_used": float(mortality_threshold),
+                    "mortality_n_stays_leq10": n_mort_leq10,
+                    "mortality_auc_leq10": mortality_auc_leq10,
                 })
                 if return_mortality_arrays:
                     result["mortality_probs_stay"] = np.asarray(

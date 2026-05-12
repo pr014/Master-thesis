@@ -2,7 +2,7 @@
 #SBATCH --job-name=cnn_scratch_los
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=01:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)

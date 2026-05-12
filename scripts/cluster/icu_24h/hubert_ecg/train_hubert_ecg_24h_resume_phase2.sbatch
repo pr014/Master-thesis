@@ -2,7 +2,7 @@
 #SBATCH --job-name=hubert_ecg_p2_resume
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=3:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -14,8 +14,15 @@
 
 # Resume Phase 2 only from a prior job's trainer checkpoint (e.g. after TIMEOUT).
 # Set RESUME_CKPT to the HuBERT_ECG_best_<OLD_JOBID>.pt from the interrupted run.
+#
+# Continuation of HuBERT-ECG run 4644580 (A7.1 / H1, base weights, unfrozen):
+#   - Phase 1 finished (hubert_ecg_phase1_best_4644580.pt was saved)
+#   - Phase 2 ran >=2 epochs before SLURM TIMEOUT; latest trainer state is in
+#     HuBERT_ECG_best_4644580.pt (contains model + optimizer + scheduler + RNG + history + epoch).
+#   - Default below resumes that Phase 2 exactly where it stopped.
+# Override at submit time with: sbatch --export=ALL,RESUME_CKPT=outputs/checkpoints/HuBERT_ECG_best_<JOBID>.pt ...
 
-RESUME_CKPT="${RESUME_CKPT:-outputs/checkpoints/HuBERT_ECG_best_3768869.pt}"
+RESUME_CKPT="${RESUME_CKPT:-outputs/checkpoints/HuBERT_ECG_best_4644580.pt}"
 
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"

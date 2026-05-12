@@ -2,11 +2,11 @@
 #SBATCH --job-name=lstm_uni_24h
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=03:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
+#SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
-#SBATCH --mem=16G               # RAM-Anforderung (16GB sollte für Batch-Size 64 reichen)
+#SBATCH --mem=24G               # RAM (Batch 128 / DataLoader)
 #SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU, jede verfügbare)
 #SBATCH --mail-type=BEGIN,END   # E-Mail bei Start und Ende
 #SBATCH --mail-user=zx9981@partner.kit.edu  # Deine E-Mail-Adresse
@@ -124,10 +124,13 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN (24h Dataset - LOS REGRESSION with Augmentation)
 # ============================================================================
 
-# Training starten mit baseline_with_aug config
-# Das Script verwendet automatisch configs/icu_24h/baseline_with_aug.yaml
-# (LOS Regression, mit Augmentation, ohne demographic features)
-python scripts/training/icu_24h/lstm/train_lstm_24h.py
+# Training: Default 1-Layer; optional z. B.
+#   LSTM_MODEL_CONFIG=configs/model/lstm/unidirectional/lstm_2layer.yaml sbatch ...
+LSTM_MODEL_CONFIG="${LSTM_MODEL_CONFIG:-configs/model/lstm/unidirectional/lstm_1layer.yaml}"
+echo "Using model config: ${LSTM_MODEL_CONFIG}"
+
+python scripts/training/icu_24h/lstm/train_lstm_24h.py \
+  --model-config "${LSTM_MODEL_CONFIG}"
 
 TRAINING_EXIT_CODE=$?
 
@@ -175,7 +178,7 @@ echo ""
 echo "Vollständige Logs verfügbar in: $LOG_FILE"
 echo "Checkpoints verfügbar in: outputs/checkpoints/"
 echo ""
-echo "Config verwendet: configs/icu_24h/baseline_with_aug.yaml"
+echo "Config: ${LSTM_MODEL_CONFIG} (P1 / H4 / AG1 / D1, f1_optimal wenn in YAML)"
 echo "Task: LOS REGRESSION (continuous prediction in days)"
 
 # Exit mit Training-Exit-Code

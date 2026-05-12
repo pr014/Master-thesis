@@ -2,7 +2,7 @@
 #SBATCH --job-name=optuna_hybrid_cnn_lstm
 #SBATCH --output=outputs/logs/slurm_optuna_hybrid_%j.out
 #SBATCH --error=outputs/logs/slurm_optuna_hybrid_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00   # wall time per job (tune if 100 trials exceed this on your GPU)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -72,7 +72,7 @@ if [ -z "${OPTUNA_STUDY_NAME:-}" ]; then
     exit 1
 fi
 
-N_TRIALS="${N_TRIALS_PER_JOB:-1}"
+N_TRIALS="${N_TRIALS_PER_JOB:-100}"
 echo "OPTUNA_STORAGE=${OPTUNA_STORAGE}"
 echo "OPTUNA_STUDY_NAME=${OPTUNA_STUDY_NAME}"
 echo "N_TRIALS_PER_JOB=${N_TRIALS}"

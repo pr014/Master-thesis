@@ -329,7 +329,7 @@ class ECGDataset(Dataset):
             self._load_ehr_window_features(ehr_window_norm)
         
         # Task type: "regression" (default) or "classification" (backward compatibility)
-        self.task_type = data_config.get("task_type", "regression")
+        self.task_type = data_config.get("task_type") or data_config.get("los_task", "regression")
         
         # Regression sample weighting
         self.regression_weights = regression_weights

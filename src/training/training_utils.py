@@ -139,12 +139,26 @@ def evaluate_and_print_results(
             "Ensure SLURM_JOB_ID environment variable is set."
         )
 
-    # Mortality: choose threshold on validation (max F1, stay-level); apply same threshold on test.
+    # Mortality: default = tune threshold on validation (max F1, stay-level), apply on test.
+    # Config evaluation.mortality_test_threshold_mode=fixed_0_5 matches training_utils_H1_H4 (fixed 0.5).
+    eval_cfg = config.get("evaluation") or {}
+    _mt_mode = str(eval_cfg.get("mortality_test_threshold_mode", "f1_optimal")).strip().lower()
+    _fixed_modes = frozenset({"fixed_0_5", "h1_h4", "legacy"})
+    use_val_max_f1_mortality_thr = _mt_mode not in _fixed_modes
+    if _mt_mode not in _fixed_modes and _mt_mode not in (
+        "f1_optimal",
+        "val_max_f1",
+    ):
+        print(
+            f"Warning: unknown evaluation.mortality_test_threshold_mode={eval_cfg.get('mortality_test_threshold_mode')!r}; "
+            "using f1_optimal (validation max-F1 threshold)."
+        )
+
     mortality_thr = 0.5
     is_multi_task = isinstance(trainer.criterion, MultiTaskLoss) or _is_multi_task_model(
         trainer.model
     )
-    if is_multi_task and trainer.val_loader is not None:
+    if is_multi_task and trainer.val_loader is not None and use_val_max_f1_mortality_thr:
         val_out = evaluate_with_detailed_metrics(
             model=trainer.model,
             val_loader=trainer.val_loader,
@@ -162,6 +176,11 @@ def evaluate_and_print_results(
                 f"\nMortality decision threshold (validation, max F1, stay-level): "
                 f"{mortality_thr:.4f}"
             )
+    elif is_multi_task and not use_val_max_f1_mortality_thr:
+        print(
+            "\nMortality decision threshold: 0.5000 "
+            "(fixed; evaluation.mortality_test_threshold_mode uses H1/H4-style test metrics)"
+        )
 
     # Evaluate on test set with detailed metrics
     test_metrics = evaluate_with_detailed_metrics(
@@ -228,9 +247,14 @@ def evaluate_and_print_results(
     # Mortality summary (multi-task)
     if "mortality_auc" in test_metrics:
         print("\n🔹 Mortality (Binary Classification):")
+        thr_note = (
+            "(Val max F1, applied to test)"
+            if use_val_max_f1_mortality_thr
+            else "(fixed 0.5, H1/H4-style)"
+        )
         print(
             f"   Threshold: {test_metrics.get('mortality_threshold_used', mortality_thr):.4f} "
-            f"(Val max F1, applied to test)"
+            f"{thr_note}"
         )
         print(f"   Accuracy:  {test_metrics.get('mortality_accuracy', 0.0):.4f}")
         print(f"   Precision: {test_metrics.get('mortality_precision', 0.0):.4f}")
@@ -274,5 +298,9 @@ def evaluate_and_print_results(
         history["test_mortality_threshold"] = float(
             test_metrics.get("mortality_threshold_used", mortality_thr)
         )
+        if test_metrics.get("mortality_auc_leq10") is not None:
+            history["test_mortality_auc_leq10"] = float(test_metrics["mortality_auc_leq10"])
+        if test_metrics.get("mortality_n_stays_leq10") is not None:
+            history["test_mortality_n_stays_leq10"] = int(test_metrics["mortality_n_stays_leq10"])
     
     return history

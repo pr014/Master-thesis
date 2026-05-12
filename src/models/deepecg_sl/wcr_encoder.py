@@ -1,11 +1,64 @@
 """WCR Transformer Encoder Wrapper for DeepECG-SL."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import torch
 import torch.nn as nn
 from pathlib import Path
 
 from .checkpoint_utils import load_wcr_checkpoint
+
+
+def _find_wcr_pretrained_pair(
+    project_root: Path,
+    cache_dir_path: Path,
+    model_name: str,
+    base_ssl_name: str,
+) -> Optional[Tuple[Path, Path]]:
+    """Locate (wcr_checkpoint.pt, base_ssl.pt) for common on-disk layouts."""
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(p: Path) -> None:
+        p = p.resolve()
+        key = str(p)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(p)
+
+    _add(cache_dir_path)
+    # Under the same cache_dir (e.g. .../deepecg_sl/), Linux is case-sensitive: WCR_77_classes vs wcr_77_classes.
+    _add(cache_dir_path / "WCR_77_classes")
+    _add(cache_dir_path / "wcr_77_classes")
+    pw = project_root / "data" / "pretrained_weights"
+    dsl = pw / "deepecg_sl"
+    _add(dsl / "WCR_77_classes")
+    _add(dsl / "wcr_77_classes")
+    _add(pw / "WCR_77_classes")
+    _add(pw / "wcr_77_classes")
+    _add(pw / model_name)
+    if model_name.lower() == "wcr_77_classes":
+        _add(pw / "WCR_77_classes")
+    # Flat layout: base_ssl.pt + <model>.pt next to each other
+    _add(pw)
+
+    for root in candidates:
+        if not root.is_dir():
+            continue
+        base_ssl = root / base_ssl_name
+        if not base_ssl.is_file():
+            continue
+        flat_ckpt = root / f"{model_name}.pt"
+        if flat_ckpt.is_file() and flat_ckpt.name != base_ssl_name:
+            return flat_ckpt.resolve(), base_ssl.resolve()
+        pts = sorted(
+            f
+            for f in root.glob("*.pt")
+            if f.is_file() and f.name != base_ssl_name
+        )
+        if pts:
+            return pts[0].resolve(), base_ssl.resolve()
+    return None
 
 
 class WCREncoder(nn.Module):
@@ -41,14 +94,39 @@ class WCREncoder(nn.Module):
         # Basename only for paths under cache_dir/model_name (avoid join with wrongly expanded absolute path)
         base_ssl_name = Path(base_ssl_path).name
         
+        project_root = Path(__file__).parent.parent.parent.parent
         # Resolve cache directory path (relative to project root)
         cache_dir_path = Path(cache_dir)
         if not cache_dir_path.is_absolute():
-            # Try to find project root (go up from src/models/deepecg_sl/wcr_encoder.py)
             # wcr_encoder.py -> deepecg_sl -> models -> src -> MA-thesis-1 (project root)
-            project_root = Path(__file__).parent.parent.parent.parent
             cache_dir_path = (project_root / cache_dir).resolve()
-        
+        else:
+            cache_dir_path = cache_dir_path.resolve()
+
+        # Some checkpoints store a non-portable cache_dir (e.g. "/deepecg_sl") → /deepecg_sl/base_ssl.pt on Linux.
+        # If that tree has no weights, fall back to the repo layout: data/pretrained_weights/deepecg_sl/
+        def _weights_layout_ok(cdir: Path) -> bool:
+            if (cdir / base_ssl_name).is_file() and (cdir / f"{model_name}.pt").is_file():
+                return True
+            for sub in (model_name, "WCR_77_classes", "wcr_77_classes"):
+                b = cdir / sub / base_ssl_name
+                if not b.is_file():
+                    continue
+                d = cdir / sub
+                if any(
+                    f.is_file() and f.name != base_ssl_name for f in d.glob("*.pt")
+                ):
+                    return True
+            return False
+
+        default_deepecg_sl = (project_root / "data" / "pretrained_weights" / "deepecg_sl").resolve()
+        if not _weights_layout_ok(cache_dir_path) and _weights_layout_ok(default_deepecg_sl):
+            print(
+                f"[WCR] cache_dir from config not usable ({cache_dir!r} -> {cache_dir_path}); "
+                f"using {default_deepecg_sl}"
+            )
+            cache_dir_path = default_deepecg_sl
+
         # Handle base_ssl_path - try absolute first, then relative to cache_dir
         base_ssl_path_obj = Path(base_ssl_path)
         if base_ssl_path_obj.is_absolute():
@@ -72,32 +150,51 @@ class WCREncoder(nn.Module):
             checkpoint_path = str(checkpoint_direct)
             base_ssl_full_path = str(base_ssl_direct)
         else:
-            # Try old structure: cache_dir/model_name/
-            model_dir_path = cache_dir_path / model_name
-            base_ssl_old = model_dir_path / base_ssl_name
-            
-            if base_ssl_old.exists():
-                # Old structure found
+            # Subdirectory layout: cache_dir/<subdir>/base_ssl.pt + other .pt
+            # Prefer config model_name first (unchanged behaviour); then case variants for Linux (APFS often is not).
+            model_dir_path: Optional[Path] = None
+            base_ssl_old: Optional[Path] = None
+            for sub in (model_name, "WCR_77_classes", "wcr_77_classes"):
+                md = cache_dir_path / sub
+                cand = md / base_ssl_name
+                if cand.is_file():
+                    model_dir_path = md
+                    base_ssl_old = cand
+                    break
+
+            if model_dir_path is not None and base_ssl_old is not None:
                 print(f"Found weights in subdirectory: {model_dir_path}")
                 model_dir = model_dir_path
-                # Find checkpoint file (any .pt file except base_ssl.pt)
-                checkpoint_files = [f for f in model_dir.glob("*.pt") if f.name != "base_ssl.pt"]
+                checkpoint_files = [
+                    f for f in model_dir_path.glob("*.pt") if f.is_file() and f.name != base_ssl_name
+                ]
                 if not checkpoint_files:
                     raise FileNotFoundError(
-                        f"No checkpoint file found in {model_dir} (excluding base_ssl.pt)"
+                        f"No checkpoint file found in {model_dir} (excluding {base_ssl_name!r})"
                     )
                 checkpoint_path = str(checkpoint_files[0])
                 base_ssl_full_path = str(base_ssl_old.resolve())
             else:
-                flat_ckpt = cache_dir_path / f"{model_name}.pt"
-                subdir = cache_dir_path / model_name
-                raise FileNotFoundError(
-                    "WCR weights not found locally (no HuggingFace download). "
-                    "Expected either:\n"
-                    f"  1) {base_ssl_direct} and {flat_ckpt}, or\n"
-                    f"  2) {subdir / base_ssl_name} plus a second .pt checkpoint in {subdir}\n"
-                    f"(model.wcr.model_name={model_name!r}, cache_dir={cache_dir_path})"
+                found = _find_wcr_pretrained_pair(
+                    project_root, cache_dir_path, model_name, base_ssl_name
                 )
+                if found is not None:
+                    ck, bs = found
+                    checkpoint_path = str(ck)
+                    base_ssl_full_path = str(bs)
+                    model_dir = ck.parent
+                    print(f"Found WCR weights via fallback search under: {model_dir}")
+                else:
+                    flat_ckpt = cache_dir_path / f"{model_name}.pt"
+                    subdir = cache_dir_path / model_name
+                    raise FileNotFoundError(
+                        "WCR weights not found locally (no HuggingFace download). "
+                        "Expected either:\n"
+                        f"  1) {base_ssl_direct} and {flat_ckpt}, or\n"
+                        f"  2) {subdir / base_ssl_name} plus a second .pt checkpoint in {subdir}, or\n"
+                        f"  3) the same under cache_dir/WCR_77_classes/ (case variant)\n"
+                        f"(model.wcr.model_name={model_name!r}, cache_dir={cache_dir_path})"
+                    )
         
         # Determine device
         if device is None:

@@ -1,5 +1,10 @@
 # XGBoost with Hand-crafted Features - LOS Regression
 # Configuration for training XGBoost with hand-crafted ECG features
+#
+# Studienzeile A1 | gemeinsam für alle Architekturen: P1, D1, AG1 (H1 = Hyperparameter, folgt pro Architektur)
+# - P1: data/icu_ecgs_24h/P1
+# - D1: keine Demographics / keine ICU-Unit-Features (features.use_demographics: false)
+# - AG1: nur Gauß-Rauschen auf Rohsignal vor Feature-Extraktion (kein Amplitude Scaling)
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -37,13 +42,13 @@ data:
     filter_order: 4  # Butterworth filter order
     normalize: "zscore"  # Z-score normalization per lead
   
-  # Data augmentation (enabled for fair comparison with DL models; augments raw signals before feature extraction)
+  # Data augmentation (AG1: nur Gauß-Rauschen; augments raw signals before feature extraction)
   augmentation:
     enabled: true
     gaussian_noise: true
-    noise_std: 0.03  # 3% of signal std (AG1)
-    amplitude_scaling: true
-    scale_min: 0.85  # 85-115% (AG1)
+    noise_std: 0.03  # Anteil der Signal-Std (AG1)
+    amplitude_scaling: false
+    scale_min: 0.85
     scale_max: 1.15
     baseline_wander: false
     lead_dropout: false
@@ -118,6 +123,15 @@ validation:
   val_split: 0.1  # Fraction of data for validation (10% for 80-10-10 split)
 
 test_split: 0.1  # Fraction of data for testing (10% for 80-10-10 split)
+
+# =============================================================================
+# TEST / REPORTING (mortality operating point; XGBoost evaluate_mortality uses fixed 0.5)
+# =============================================================================
+
+evaluation:
+  # f1_optimal = tune threshold on val (max F1) for DL scripts using training_utils — not used by this XGBoost script.
+  # fixed_0_5 = document H1/H4-style fixed 0.5 (current XGBoost behavior).
+  mortality_test_threshold_mode: fixed_0_5
 
 # =============================================================================
 # CHECKPOINTING & LOGGING

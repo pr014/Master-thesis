@@ -1,5 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=hybrid_cnn_lstm_24h_weighted
+# Standard-Jobname (Mails/squeue). Für Feature-Label z. B. hybrid_d3 beim Submit überschreiben:
+#   sbatch --job-name=hybrid_d3 --export=ALL,TRAIN_EXTRA_ARGS="--model-config configs/model/hybrid_cnn_lstm/d1_d6/d3.yaml" ...
+# D1–D6 parallel: train_hybrid_cnn_lstm_24h_d1_d6.sbatch (setzt Jobname hybrid_d%a automatisch).
+#SBATCH --job-name=hybrid_cnn_lstm_24h
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
 #SBATCH --time=02:00:00          # Maximale Laufzeit (Format: HH:MM:SS oder Tage-HH:MM:SS)
@@ -14,6 +17,7 @@
 
 # Print job information
 echo "Job ID: $SLURM_JOB_ID"
+echo "Slurm job name (Mails/squeue): ${SLURM_JOB_NAME:-n/a}"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"

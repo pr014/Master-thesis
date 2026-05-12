@@ -6,7 +6,7 @@
 #
 # Optional overrides (export before running):
 #   OPTUNA_OUTPUT_DATE=2026-04-03          # default: today (YYYY-MM-DD)
-#   OPTUNA_STUDY_NAME=my_study             # default: hybrid_cnn_lstm_hpo_tab_<YYYYMMDD>
+#   OPTUNA_STUDY_NAME=my_study             # default: hybrid_cnn_lstm_hpo_tab_<YYYYMMDD>_ehrsmall
 #   NUM_JOBS=1                             # default: 1 worker/job id
 #   N_TRIALS_PER_JOB=100                   # default: 100 trials in that one job
 #   OPTUNA_EXPORT_CSV=0                    # default: 1 (same as DeepECG); use 0 to skip per-job CSV races on NFS+SQLite
@@ -17,7 +17,7 @@
 #     storage/optuna.db
 #     trial_configs/
 #     exports/optuna_trials.csv            # all trials, written if OPTUNA_EXPORT_CSV=1
-#     exports/optuna_best_trial.csv        # best trial params + stored metrics, written if OPTUNA_EXPORT_CSV=1
+#     exports/optuna_best_trial.csv        # best trial (min val_loss), written if OPTUNA_EXPORT_CSV=1
 #
 # SQLite on shared NFS + many writers: prefer PostgreSQL for OPTUNA_STORAGE if you see DB lock issues.
 # Parallel workers must not all call create_study on an empty DB at once (SQLAlchemy CREATE TABLE race).
@@ -33,7 +33,8 @@ unset OPTUNA_HYBRID_SMOKE_OBJECTIVE || true
 OPTUNA_OUTPUT_DATE="${OPTUNA_OUTPUT_DATE:-$(date +%F)}"
 DATE_COMPACT="${OPTUNA_OUTPUT_DATE//-/}"
 if [[ -z "${OPTUNA_STUDY_NAME:-}" ]]; then
-  OPTUNA_STUDY_NAME="hybrid_cnn_lstm_hpo_tab_${DATE_COMPACT}"
+  # Suffix _ehrsmall: distinct Optuna study from older full-EHR runs on the same calendar day.
+  OPTUNA_STUDY_NAME="hybrid_cnn_lstm_hpo_tab_${DATE_COMPACT}_ehrsmall"
 fi
 NUM_JOBS="${NUM_JOBS:-1}"
 N_TRIALS_PER_JOB="${N_TRIALS_PER_JOB:-100}"
@@ -83,7 +84,7 @@ fi
 case "${OPTUNA_STORAGE}" in
   sqlite:///*)
     echo "Initializing Optuna SQLite study/schema once (avoids parallel CREATE TABLE race)..."
-    echo "  (same TPESampler + MedianPruner as optuna_hybrid_cnn_lstm_worker — see scripts/tuning/hybrid_cnn_lstm_study_config.py)"
+    echo "  (TPESampler + MedianPruner on val_loss — see scripts/tuning/hybrid_cnn_lstm_study_config.py)"
     "${PYTHON_BIN}" -c "
 import sys
 from pathlib import Path

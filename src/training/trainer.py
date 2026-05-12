@@ -298,14 +298,17 @@ class Trainer:
                     self.history[key] = [value]
 
             if self.optuna_trial is not None and val_metrics:
-                mae = val_metrics.get("val_los_mae")
-                if mae is not None:
-                    # Same intermediate metric as Optuna HPO objective (minimize val LOS MAE).
-                    self.optuna_trial.report(float(mae), step=epoch - 1)
-                if self.optuna_trial.should_prune():
-                    self.logger.info(f"Optuna TrialPruned at epoch {epoch} (val_los_mae reported)")
-                    print(f"Optuna TrialPruned at epoch {epoch}")
-                    raise optuna.TrialPruned()
+                study = getattr(self.optuna_trial, "study", None)
+                n_dir = len(study.directions) if study is not None else 1
+                if n_dir == 1:
+                    # MedianPruner: reported value must match scalar objective (min val_loss).
+                    vl = val_metrics.get("val_loss")
+                    if vl is not None:
+                        self.optuna_trial.report(float(vl), step=epoch - 1)
+                    if self.optuna_trial.should_prune():
+                        self.logger.info(f"Optuna TrialPruned at epoch {epoch} (val_loss reported)")
+                        print(f"Optuna TrialPruned at epoch {epoch}")
+                        raise optuna.TrialPruned()
             
             # Logging
             if epoch % log_frequency == 0 or epoch == 1:

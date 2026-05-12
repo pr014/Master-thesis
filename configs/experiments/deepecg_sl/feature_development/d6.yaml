@@ -1,0 +1,18 @@
+# D6: EHR_feature_data_small + ICU + demographics
+data:
+  demographic_features:
+    enabled: true
+  icu_unit_features:
+    enabled: true
+  ehr_window_features:
+    enabled: true
+    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
+    exclude_columns:
+      - "study_id"
+      - "subject_id"
+      - "ecg_time"
+      - "stay_id"
+      - "stay_intime"
+      - "hadm_id"
+      - "t_cut"
+    normalize: "zscore"

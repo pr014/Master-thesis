@@ -1,0 +1,8 @@
+# D4: demographics + ICU unit
+data:
+  demographic_features:
+    enabled: true
+  icu_unit_features:
+    enabled: true
+  ehr_window_features:
+    enabled: false

@@ -38,7 +38,7 @@ def get_loss(config: Dict[str, Any]) -> nn.Module:
     
     # Check task type - regression or classification
     data_config = config.get("data", {})
-    task_type = data_config.get("task_type", "regression")  # Default to regression
+    task_type = data_config.get("task_type") or data_config.get("los_task", "regression")
     use_weighted = loss_config.get("weighted", False)
 
     if task_type == "regression" or loss_type == "mse":
@@ -233,7 +233,7 @@ def get_multi_task_loss(config: Dict[str, Any]) -> MultiTaskLoss:
     huber_delta = los_loss_config.get("delta", 1.0)
 
     # Check task type - if classification, use cross_entropy compatible loss
-    task_type = data_config.get("task_type", "regression")
+    task_type = data_config.get("task_type") or data_config.get("los_task", "regression")
     if task_type == "classification":
         # For backward compatibility, but we're now using regression
         los_loss_type = "mse"  # Still use MSE as a fallback

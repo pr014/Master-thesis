@@ -1,8 +1,10 @@
-# HuBERT-ECG — Small weights (hidden_size=512 laut config.json), H2-Training (AdamW, Warmup, Phasen)
-# Wie Job 3730714 (P1, H2, AG4): Daten P1, Augmentation AG4-Subset ohne Amplitude-Scaling
-# Tabular wie Hybrid/DeepECG: Demographics + ICU-Unit + SOFA (Late Fusion)
-# Phase 1: eingefrorener Backbone, nur Heads (max. Epochen = training.num_epochs)
-# Phase 2: unfrozen Transformer, Feature-Extractor bleibt frozen (Skript: max 20 Epochen)
+# HuBERT-ECG — Pretrained **base** — Studienzeile A7.1 | H1 (Studientabelle)
+#
+# Gemeinsam mit allen Architekturen: P1, D1, AG1
+# - Gewichte: `pretrained.cache_dir` → HuBERT-ECG **base**
+# - H1: Adam lr 5e-4 (alle Gruppen gleich), batch 32, wd 1e-4, dropout 0.1, ReduceLROnPlateau factor 0.1 patience 5,
+#       min_lr 1e-6, ES patience 7, MSE; hidden/embedding 768; Scheduler reduceLROnPlateau (kein Linear-Warmup)
+# - Zwei-Phasen-Skript: Phase 1 nur Köpfe, Phase 2 Encoder fein (alle LRs 5e-4 gemäß „Layer-Wise LR false“)
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -36,7 +38,7 @@ data:
     filter_order: 4
     normalize: "zscore"
 
-  # Wie Hybrid/DeepECG: Gaussian, Lead Drop, Baseline Wander — kein Amplitude-Scaling
+  # AG1: nur Gauß-Rauschen
   augmentation:
     enabled: true
     gaussian_noise: true
@@ -44,16 +46,16 @@ data:
     amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
-    baseline_wander: true
+    baseline_wander: false
     bw_freq_min: 0.15
     bw_freq_max: 0.4
     bw_amp_min: 0.03
     bw_amp_max: 0.08
-    lead_dropout: true
+    lead_dropout: false
     lead_dropout_prob: 0.1
 
   demographic_features:
-    enabled: true
+    enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
     age_normalization: "minmax"
     age_min: 0
@@ -63,7 +65,7 @@ data:
     missing_sex_strategy: "default"
 
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     icu_unit_list:
       - "Medical Intensive Care Unit (MICU)"
@@ -80,7 +82,7 @@ data:
     missing_strategy: "most_common"
 
   sofa_features:
-    enabled: true
+    enabled: false
     csv_path: "data/labeling/labels_csv/sofa_scores.csv"
     columns:
       - sofa_total
@@ -99,20 +101,20 @@ model:
   hubert:
     checkpoint_path: "model.safetensors"
     config_path: "config.json"
-    hidden_size: 512
-    freeze_backbone: true
+    hidden_size: 768
+    freeze_backbone: false
     gradient_checkpointing: false
     apply_preprocessing: false
 
   pretrained:
     enabled: true
-    cache_dir: "data/pretrained_weights/Hubert_ECG/small"
+    cache_dir: "data/pretrained_weights/Hubert_ECG/base"
 
-  feature_dim: 512
-  shared_dim: 128
+  feature_dim: 768
+  shared_dim: 768
 
 # =============================================================================
-# TRAINING (H2: Batch 32, AdamW, Linear warmup 8%, Huber/MSE — hier MSE)
+# TRAINING — H1 (siehe Kopfkommentar; Phase-1-Max = num_epochs, Phase-2-Max = 20 im Skript)
 # =============================================================================
 
 training:
@@ -122,19 +124,22 @@ training:
   pin_memory: true
 
   optimizer:
-    type: "AdamW"
-    lr: 1.0e-4
-    backbone_lr: 1.0e-5
-    deep_backbone_lr: 1.0e-7
-    weight_decay: 0.01
-    betas: [0.9, 0.98]
+    type: "Adam"
+    lr: 5.0e-4
+    backbone_lr: 5.0e-4
+    deep_backbone_lr: 5.0e-4
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-6
 
   gradient_clip_norm: 1.0
   dropout_rate: 0.1
 
   scheduler:
-    type: "LinearScheduleWithWarmup"
-    warmup_steps_pct: 0.08
+    type: "ReduceLROnPlateau"
+    factor: 0.1
+    patience: 5
+    min_lr: 1.0e-6
 
   loss:
     type: "mse"
@@ -150,7 +155,7 @@ validation:
 test_split: 0.1
 
 # =============================================================================
-# EARLY STOPPING (H2: patience 7)
+# EARLY STOPPING — H1: patience 7
 # =============================================================================
 
 early_stopping:
@@ -186,6 +191,7 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
+  mortality_test_threshold_mode: fixed_0_5
 
 # =============================================================================
 # MULTI-TASK LEARNING

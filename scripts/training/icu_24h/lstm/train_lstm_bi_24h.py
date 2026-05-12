@@ -2,8 +2,14 @@
 
 LOS Regression Task: Predicts continuous LOS in days (not binned classes).
 Uses data augmentation but no demographic features.
+
+Usage:
+  python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py
+  python .../train_lstm_bi_24h.py --model-config configs/model/lstm/bidirectional/lstm_bi_2layer.yaml
+  MODEL_CONFIG_PATH=.../lstm_bi_1layer.yaml python .../train_lstm_bi_24h.py
 """
 
+import argparse
 from pathlib import Path
 import sys
 import os
@@ -25,9 +31,21 @@ def main():
     
     LOS Regression Task: Predicts continuous LOS in days.
     """
-    # Load config (standalone model config with all parameters)
-    model_config_path = Path("configs/model/lstm/bidirectional/lstm_bi_2layer.yaml")  # Using optimized 2-layer config
-    
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model-config",
+        type=str,
+        default=os.getenv(
+            "MODEL_CONFIG_PATH",
+            "configs/model/lstm/bidirectional/lstm_bi_1layer.yaml",
+        ),
+        help="Path to model YAML (relative to project root or absolute).",
+    )
+    args = parser.parse_args()
+    model_config_path = Path(args.model_config)
+    if not model_config_path.is_absolute():
+        model_config_path = (Path.cwd() / model_config_path).resolve()
+
     config = load_config(model_config_path=model_config_path)
     
     print("="*60)
@@ -93,7 +111,8 @@ def main():
     # Create loss function
     if is_multi_task:
         criterion = get_multi_task_loss(config)
-        print("Using Multi-Task Loss (LOS MSE + Mortality BCE)")
+        _lt = config.get("training", {}).get("loss", {}).get("type", "mse")
+        print(f"Using Multi-Task Loss (LOS {_lt} + Mortality BCE)")
     else:
         criterion = get_loss(config)
         print(f"Using Single-Task Loss (LOS MSE: {type(criterion).__name__})")

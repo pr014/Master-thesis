@@ -66,7 +66,7 @@ def get_parameter_counts(load_heavy_models: bool = False) -> dict[str, int]:
 
     # CNN Scratch
     try:
-        cfg = load_config(model_config_path=Path("configs/model/cnn_scratch.yaml"))
+        cfg = load_config(model_config_path=Path("configs/model/CNN/cnn_scratch.yaml"))
         m = CNNScratch(cfg)
         params["CNN Scratch"] = m.count_parameters()
     except Exception:

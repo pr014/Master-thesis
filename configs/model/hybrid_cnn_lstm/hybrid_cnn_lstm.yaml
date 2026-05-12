@@ -1,13 +1,13 @@
-# Hybrid CNN-LSTM - Vollständige Konfiguration
-# Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
+# Hybrid CNN-LSTM — Studienzeile A5
+# P1 / H4 / AG1 / D1 (ein Trainingslauf; Hybrid-Optuna nutzt separates Merge, siehe unten)
+# - P1: data/icu_ecgs_24h/P1 + Bandpass/Z-score (preprocessing)
+# - D1: ECG-only — keine Demographics, keine ICU-Unit-, keine EHR-/SOFA-/Therapie-Features (alles enabled: false)
+# - AG1: nur Gaussian Noise (noise_std 0.03); kein Amplitude Scaling, kein Lead-Drop, kein Baseline-Wander
+# - H4: Tabelle H4 — lr 2e-4, Batch 64, wd 2e-4, dropout_rate 0.4, lstm_dropout 0.4, grad_clip 1,
+#   ReduceLROnPlateau (factor 0.5, patience 12, min_lr 1e-6), ES patience 7, hidden_dim 128 / layer2 64,
+#   Adam betas [0.9, 0.999], LOS-Loss Huber (delta 1.0)
 #
-# Diese Variante: Datensatz P1 | Augmentation AG6 | alle tabularen Features aus (nur ECG).
-#
-# AG6: Gaussian Noise 3% der Signal-Std, Lead Dropout p=0.1 pro Ableitung, Baseline-Wander
-#      0.15–0.4 Hz, Amplitude 0.03–0.08 (kein Amplitude-Scaling).
-#      time_segment_shuffle und mortality_balance_time_shuffle (Oversampling) sind aus.
-# P1: icu_ecgs_24h/P1 mit per-lead Z-Score beim Laden (preprocessing.normalize: zscore).
-# Improved architecture with mean pooling and dropout between LSTM layers
+# Mortalität Test-Eval: f1_optimal (Val-max-F1 Threshold, auf Test angewandt), siehe training_utils.
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -47,7 +47,7 @@ data:
     filter_order: 4
     normalize: "zscore"
   
-  # Augmentation AG6 (siehe Kopfkommentar)
+  # Augmentation AG1 (siehe Kopfkommentar)
   augmentation:
     enabled: true
     gaussian_noise: true
@@ -55,15 +55,13 @@ data:
     amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
-    lead_dropout: true
+    lead_dropout: false
     lead_dropout_prob: 0.1
-    baseline_wander: true
+    baseline_wander: false
     bw_freq_min: 0.15
     bw_freq_max: 0.4
     bw_amp_min: 0.03
     bw_amp_max: 0.08
-    # Nur AG6 (Noise / Lead-Drop / Baseline-Wander): kein globales Time-Segment-Shuffle,
-    # kein Mortality-Oversampling mit Child-Shuffles.
     time_segment_shuffle: false
     time_segment_shuffle_num_segments: 5
     time_segment_shuffle_p: 0.5
@@ -120,11 +118,11 @@ data:
       - rrt
     filter_to_labeled_only: true
 
-  # Kleine EHR-Tabelle als Late-Fusion-Features; Metadaten/IDs werden ausgeschlossen
   ehr_window_features:
     enabled: false
-    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
+    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
     exclude_columns:
+      - "base_path"
       - "study_id"
       - "subject_id"
       - "ecg_time"
@@ -152,16 +150,12 @@ model:
   conv3_kernel: 3
   # Padding defaults to kernel//2 for same-length conv
 
-  # LSTM parameters (consistent with Bidirectional LSTM model)
-  # Architecture: 2-Layer Bidirectional LSTM
-  # Layer 1: 128 per direction → 256 output
-  # Layer 2: 128 per direction → 256 output (input is 256 from Layer 1)
-  # Dropout between layers prevents overfitting
-  hidden_dim: 128  # Hidden dimension per direction for Layer 1 (forward + backward = 256 total)
-  hidden_dim_layer2: 128  # Hidden dimension per direction for Layer 2 (keep same as Layer 1)
-  num_layers: 2  # Number of LSTM layers (hierarchical temporal dependencies)
-  lstm_dropout: 0.4  # Dropout between LSTM layers (prevents overfitting)
-  bidirectional: true  # Bidirectional LSTM (enforced in model)
+  # LSTM — H4: hidden_dim 128 / hidden_dim_layer2 64 (pro Richtung)
+  hidden_dim: 128
+  num_layers: 2
+  lstm_dropout: 0.4  # H4 (Tabelle)
+  bidirectional: true
+  hidden_dim_layer2: 64
   
   # Pooling Strategy
   # "mean": Aggregates information across all timesteps (recommended)
@@ -175,30 +169,29 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 64
+  batch_size: 64  # H4
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "Adam"
-    lr: 2e-4
-    weight_decay: 2e-4
-    betas: [0.9, 0.999]
-  
-  gradient_clip_norm: 1.0
-  dropout_rate: 0.4
-  
+    lr: 2.0e-4  # H4
+    weight_decay: 2.0e-4  # H4
+    betas: [0.9, 0.999]  # H4
+
+  gradient_clip_norm: 1.0  # H4
+  dropout_rate: 0.4  # H4 (CNN/Head)
+
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.5
-    patience: 7
-    min_lr: 1e-6
-  
+    factor: 0.5  # H4
+    patience: 12  # H4
+    min_lr: 1.0e-6  # H4
+
   loss:
-    type: "huber"
-    delta: 1.0
-    weighted: false
+    type: "huber"  # H4
+    delta: 1.0     # H4 (Huber delta — bitte ggf. anpassen, falls in Tabelle abweichend)
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -216,7 +209,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 12
+  patience: 7  # H4
   monitor: "val_loss"
   mode: "min"
 
@@ -247,6 +240,8 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
+  # F1-optimal: Schwelle auf Validierung per max-F1 tunen, dann auf Test anwenden (siehe training_utils).
+  mortality_test_threshold_mode: f1_optimal
 
 # =============================================================================
 # MULTI-TASK LEARNING

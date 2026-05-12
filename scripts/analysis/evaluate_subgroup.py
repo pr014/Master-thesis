@@ -43,6 +43,7 @@ from src.models import (
     CNNScratch,
     HybridCNNLSTM,
     DeepECG_SL,
+    HuBERT_ECG,
     LSTM1D,
 )
 from src.models.lstm import LSTM1D_Unidirectional, LSTM1D_Bidirectional
@@ -63,6 +64,7 @@ _MODEL_REGISTRY = {
     "HybridCNNLSTM": HybridCNNLSTM,
     "CNNScratch": CNNScratch,
     "DeepECG_SL": DeepECG_SL,
+    "HuBERT_ECG": HuBERT_ECG,
 }
 
 

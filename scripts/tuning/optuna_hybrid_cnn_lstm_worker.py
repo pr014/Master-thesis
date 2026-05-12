@@ -3,7 +3,10 @@
 
 Merges configs/tuning/hybrid_cnn_lstm/optuna_base.yaml with sampled hyperparameters,
 writes one YAML per trial, runs train_hybrid_cnn_lstm.run_training, and minimizes
-validation LOS MAE.
+**best validation total loss** ``min_t val_loss(t)`` — the same multi-task combined
+loss (LOS + mortality) as in training when loss weights are fixed to 1:1.
+
+MedianPruner receives per-epoch ``val_loss`` from the trainer (aligned with this objective).
 
 Environment (typical):
   OPTUNA_STORAGE    - RDB URL, e.g. postgresql://... or sqlite:///abs/path/optuna.db
@@ -13,22 +16,22 @@ Environment (typical):
 Optional smoke test (no GPU training; validates YAML + Optuna + CSV export):
   OPTUNA_HYBRID_SMOKE_OBJECTIVE=1
 
-Study: ``TPESampler`` (seed via ``OPTUNA_TPE_SEED``) and ``MedianPruner``
-(``OPTUNA_MEDIAN_N_STARTUP_TRIALS``, ``OPTUNA_MEDIAN_N_WARMUP_STEPS``) — see
-``scripts/tuning/hybrid_cnn_lstm_study_config.py``. The trainer reports
-``val_los_mae`` after each validation epoch (same scale as the objective).
+Study: ``TPESampler`` + ``MedianPruner`` — see ``scripts/tuning/hybrid_cnn_lstm_study_config.py``.
 
 Per tuning run, use a unique OPTUNA_STUDY_NAME. Artifacts land under
 outputs/tuning/hybrid_cnn_lstm/<YYYY-MM-DD>/<study-name>/:
   - trial_configs/    merged YAML per trial
-  - exports/          optuna_trials.csv when --export-csv-after is enabled
-                      optuna_best_trial.csv with best params + stored metrics
+  - exports/          optuna_trials.csv, optuna_best_trial.csv (when --export-csv-after)
 
-Single search space:
-  Fixed for all Optuna runs via optuna_base.yaml: num_epochs=200, LOS loss=mse,
-  early_stopping.patience=15, demographics + ICU unit + full EHR features, AG6.
-  Tuned: optimizer, dropout, scheduler, CNN/LSTM shape presets, pooling, layers,
-  multi-task weights, and AG6 strengths (noise / lead-drop / baseline wander).
+Search space (hybrid CNN-LSTM):
+  Multi-task training (LOS + mortality) with fixed loss weights 1/1 in optuna_base.
+  Fixed via optuna_base.yaml + model YAML: num_epochs=200, Huber(delta=1) LOS loss,
+  batch_size=64, CNN 32/64/128, num_layers=2, pooling=mean, los/mortality weights=1,
+  early_stopping.patience=15, demographics + ICU unit + EHR window CSV from optuna_base, AG6
+  numeric strengths, AdamW + betas [0.9,0.999], gradient_clip_norm=2.0,
+  ReduceLROnPlateau (factor=0.5, patience=6, min_lr=1e-6).
+  Tuned per trial: lr, weight_decay, dropout_rate, lstm_dropout, LSTM hidden
+  preset among (64,64), (128,128), (256,256).
   Dataset stays P1; preprocessing is not tuned.
 """
 
@@ -41,14 +44,14 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 _Tuning_DIR = PROJECT_ROOT / "scripts" / "tuning"
 if str(_Tuning_DIR) not in sys.path:
     sys.path.insert(0, str(_Tuning_DIR))
-import hybrid_cnn_lstm_study_config  # defines TPESampler + MedianPruner (shared with launch script precreate)
+import hybrid_cnn_lstm_study_config  # TPESampler + MedianPruner (shared with launch precreate)
 
 import optuna
 
@@ -83,46 +86,71 @@ def _normalize_output_date(value: Optional[str]) -> str:
     return raw
 
 
-_CNN_WIDTH_PRESETS: Dict[str, tuple[int, int, int]] = {
-    "32_64_128": (32, 64, 128),
-    "48_96_192": (48, 96, 192),
-    "64_128_256": (64, 128, 256),
-    "24_48_96": (24, 48, 96),
-}
-
+# Symmetric LSTM hidden sizes (layer1, layer2); tuned via suggest_categorical keys.
 _LSTM_HIDDEN_PRESETS: Dict[str, tuple[int, int]] = {
     "64_64": (64, 64),
-    "96_96": (96, 96),
     "128_128": (128, 128),
-    "192_192": (192, 192),
-    "128_96": (128, 96),
-    "128_64": (128, 64),
-    "192_128": (192, 128),
+    "256_256": (256, 256),
 }
+
+
+def _max_val_mortality_auc(history: Dict[str, Any]) -> float:
+    """Max validation mortality AUC over epochs (auxiliary logging for analysis)."""
+    series = history.get("val_mortality_auc") or []
+    best: Optional[float] = None
+    for x in series:
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            continue
+        if v != v:  # NaN
+            continue
+        if best is None or v > best:
+            best = v
+    return 0.5 if best is None else best
+
+
+def _set_mortality_user_attrs_from_history(trial: optuna.Trial, history: Dict[str, Any]) -> None:
+    """Log test and validation mortality metrics for Optuna CSV (multi-task)."""
+    float_keys = [
+        ("test_mortality_auc", "test_mortality_auc"),
+        ("test_mortality_acc", "test_mortality_acc"),
+        ("test_mortality_f1", "test_mortality_f1"),
+        ("test_mortality_precision", "test_mortality_precision"),
+        ("test_mortality_recall", "test_mortality_recall"),
+        ("test_mortality_threshold", "test_mortality_threshold"),
+        ("test_mortality_auc_leq10", "test_mortality_auc_leq10"),
+    ]
+    for attr, hkey in float_keys:
+        v = history.get(hkey)
+        if v is not None:
+            trial.set_user_attr(attr, float(v))
+    n_stays = history.get("test_mortality_n_stays_leq10")
+    if n_stays is not None:
+        trial.set_user_attr("test_mortality_n_stays_leq10", int(n_stays))
+
+    val_los_mae: List[Any] = history.get("val_los_mae") or []
+    val_mort_acc: List[Any] = history.get("val_mortality_acc") or []
+    val_mort_auc: List[Any] = history.get("val_mortality_auc") or []
+    if val_los_mae and val_mort_acc and len(val_mort_acc) == len(val_los_mae):
+        best_i = min(range(len(val_los_mae)), key=lambda i: float(val_los_mae[i]))
+        trial.set_user_attr("val_mortality_acc_at_best_los_mae", float(val_mort_acc[best_i]))
+    if val_los_mae and val_mort_auc and len(val_mort_auc) == len(val_los_mae):
+        best_i = min(range(len(val_los_mae)), key=lambda i: float(val_los_mae[i]))
+        trial.set_user_attr("val_mortality_auc_at_best_los_mae", float(val_mort_auc[best_i]))
 
 
 def _build_trial_override(trial: optuna.Trial) -> Dict[str, Any]:
     """Build the single Hybrid CNN-LSTM Optuna search-space override.
 
-    num_epochs, LOS loss type, and early_stopping.patience are fixed via optuna_base YAML (200, mse, 15).
+    Fixed architecture, batch, Huber loss, pooling, layer count, CNN widths, and
+    multi-task loss weights live in optuna_base.yaml; this dict only supplies tuned keys.
     """
-    opt_type = trial.suggest_categorical("optimizer_type", ["Adam", "AdamW"])
-    lr = trial.suggest_float("lr", 3e-5, 3e-3, log=True)
-    weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
-    betas_tag = trial.suggest_categorical("optimizer_betas", ["b09_0999", "b095_0999"])
-    betas = [0.9, 0.999] if betas_tag == "b09_0999" else [0.95, 0.999]
+    lr = trial.suggest_float("lr", 1e-4, 3e-3, log=True)
+    weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
 
-    batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-    grad_clip = trial.suggest_categorical("gradient_clip_norm", [0.5, 1.0, 2.0, 5.0])
-    dropout_rate = trial.suggest_float("dropout_rate", 0.15, 0.55)
-    lstm_dropout = trial.suggest_float("lstm_dropout", 0.15, 0.55)
-
-    sched_factor = trial.suggest_categorical("scheduler_factor", [0.1, 0.2, 0.5])
-    sched_patience = trial.suggest_int("scheduler_patience", 3, 10)
-    min_lr = trial.suggest_float("scheduler_min_lr", 1e-7, 1e-5, log=True)
-
-    num_layers = trial.suggest_categorical("num_layers", [1, 2])
-    pooling = trial.suggest_categorical("pooling", ["mean", "last", "max"])
+    dropout_rate = trial.suggest_float("dropout_rate", 0.25, 0.5)
+    lstm_dropout = trial.suggest_float("lstm_dropout", 0.2, 0.5)
 
     lstm_key = trial.suggest_categorical(
         "lstm_hidden_preset",
@@ -130,66 +158,18 @@ def _build_trial_override(trial: optuna.Trial) -> Dict[str, Any]:
     )
     h1, h2 = _LSTM_HIDDEN_PRESETS[lstm_key]
 
-    cnn_key = trial.suggest_categorical(
-        "cnn_width_preset",
-        list(_CNN_WIDTH_PRESETS.keys()),
-    )
-    c1, c2, c3 = _CNN_WIDTH_PRESETS[cnn_key]
-
-    noise_std = trial.suggest_float("aug_noise_std", 0.01, 0.06)
-    lead_dropout_prob = trial.suggest_float("aug_lead_dropout_prob", 0.05, 0.25)
-    bw_freq_min = trial.suggest_float("aug_bw_freq_min", 0.1, 0.2)
-    bw_freq_max = trial.suggest_float("aug_bw_freq_max", 0.35, 0.5)
-    bw_amp_min = trial.suggest_float("aug_bw_amp_min", 0.02, 0.05)
-    bw_amp_max = trial.suggest_float("aug_bw_amp_max", 0.06, 0.12)
-    bw_freq_max = max(bw_freq_max, bw_freq_min + 0.05)
-    bw_amp_max = max(bw_amp_max, bw_amp_min + 0.01)
-
-    aug_block: Dict[str, Any] = {
-        "noise_std": noise_std,
-        "lead_dropout_prob": lead_dropout_prob,
-        "bw_freq_min": bw_freq_min,
-        "bw_freq_max": bw_freq_max,
-        "bw_amp_min": bw_amp_min,
-        "bw_amp_max": bw_amp_max,
-    }
-
-    los_w = trial.suggest_float("los_loss_weight", 0.5, 2.0, log=True)
-    mort_w = trial.suggest_float("mortality_loss_weight", 0.25, 2.0, log=True)
-
     return {
         "model": {
             "lstm_dropout": lstm_dropout,
-            "num_layers": num_layers,
-            "pooling": pooling,
             "hidden_dim": h1,
             "hidden_dim_layer2": h2,
-            "conv1_out": c1,
-            "conv2_out": c2,
-            "conv3_out": c3,
         },
         "training": {
-            "batch_size": batch_size,
             "dropout_rate": dropout_rate,
-            "gradient_clip_norm": grad_clip,
             "optimizer": {
-                "type": opt_type,
                 "lr": lr,
                 "weight_decay": weight_decay,
-                "betas": betas,
             },
-            "scheduler": {
-                "factor": sched_factor,
-                "patience": sched_patience,
-                "min_lr": min_lr,
-            },
-        },
-        "multi_task": {
-            "los_loss_weight": los_w,
-            "mortality_loss_weight": mort_w,
-        },
-        "data": {
-            "augmentation": aug_block,
         },
     }
 
@@ -205,7 +185,7 @@ def main() -> None:
         type=str,
         default=str(DEFAULT_BASE_TUNING),
         help="Merged before trial overrides. Default: optuna_base.yaml "
-        "(demographics + ICU unit + full EHR window features + AG6).",
+        "(demographics + ICU unit + EHR window table from that YAML + fixed AG6 / AdamW / scheduler / grad clip).",
     )
     parser.add_argument(
         "--output-root",
@@ -269,12 +249,17 @@ def main() -> None:
             "yes",
         ):
             trial.set_user_attr("best_val_loss", 1.0)
+            trial.set_user_attr("best_val_mae", 2.5)
             trial.set_user_attr("best_val_r2", 0.0)
+            trial.set_user_attr("aux_val_mortality_auc_max_epochs", 0.65)
             trial.set_user_attr("experiment_config_path", str(trial_yaml))
             trial.set_user_attr("job_id", os.environ.get("OPTUNA_TRIAL_JOB_ID", ""))
             trial.set_user_attr("test_los_mae", 2.0)
             trial.set_user_attr("test_los_r2", 0.0)
-            return 2.5
+            trial.set_user_attr("test_mortality_auc", 0.5)
+            trial.set_user_attr("test_mortality_f1", 0.0)
+            trial.set_user_attr("val_mortality_auc_at_best_los_mae", 0.5)
+            return 1.0
 
         metrics = run_training(
             model_config_path=model_config_path,
@@ -284,16 +269,26 @@ def main() -> None:
             print_parameter_debug=False,
             optuna_trial=trial,
         )
+        best_loss = float(metrics["best_val_loss"])
         best_mae = float(metrics["best_val_mae"])
-        trial.set_user_attr("best_val_loss", float(metrics["best_val_loss"]))
+        hist = metrics.get("history") or {}
+        max_val_mort_auc = (
+            _max_val_mortality_auc(hist) if isinstance(hist, dict) else 0.5
+        )
+
+        trial.set_user_attr("best_val_loss", best_loss)
+        trial.set_user_attr("best_val_mae", best_mae)
         trial.set_user_attr("best_val_r2", float(metrics["best_val_r2"]))
+        trial.set_user_attr("aux_val_mortality_auc_max_epochs", max_val_mort_auc)
         trial.set_user_attr("experiment_config_path", str(trial_yaml))
         trial.set_user_attr("job_id", metrics.get("job_id", ""))
         if metrics.get("test_los_mae") is not None:
             trial.set_user_attr("test_los_mae", float(metrics["test_los_mae"]))
         if metrics.get("test_los_r2") is not None:
             trial.set_user_attr("test_los_r2", float(metrics["test_los_r2"]))
-        return best_mae
+        if isinstance(hist, dict):
+            _set_mortality_user_attrs_from_history(trial, hist)
+        return best_loss
 
     study = hybrid_cnn_lstm_study_config.create_hybrid_study(
         study_name=args.study_name,
@@ -306,9 +301,9 @@ def main() -> None:
         _export_best_trial_csv(study, _study_exports_dir(study_dir) / "optuna_best_trial.csv")
 
     try:
-        print(f"Study finished. Best value: {study.best_value}, params: {study.best_params}")
-    except ValueError:
-        print("Study finished (no completed trials with a value yet).")
+        print(f"Study finished. Best value (min best val_loss): {study.best_value}, params: {study.best_params}")
+    except (ValueError, RuntimeError) as exc:
+        print(f"Study finished (could not read best trial: {exc}).")
 
 
 def _export_study_csv(study: optuna.Study, out_path: Path) -> None:

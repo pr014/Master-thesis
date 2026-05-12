@@ -12,17 +12,45 @@
 #   - P1 dataset
 #   - demographics
 #   - ICU unit one-hot
-#   - full EHR_feature_data.csv window features
-#   - AG6 augmentation: gaussian noise, lead dropout, baseline wander
+#   - EHR_feature_data_small.csv window features (bedside subset; same protocol as full HPO otherwise)
+#   - AG6 augmentation (fixed numeric strengths; not tuned in Optuna)
 #   - fixed training horizon/loss/early stopping
+#   - fixed: AdamW + betas, gradient clip, ReduceLROnPlateau (lr/wd still tuned per trial)
+#   - fixed: batch 64, Huber(delta=1), CNN 32/64/128, LSTM layers=2, pooling=mean, LOS/mort weights=1
+
+model:
+  conv1_out: 32
+  conv2_out: 64
+  conv3_out: 128
+  num_layers: 2
+  pooling: "mean"
 
 training:
   num_epochs: 200
+  batch_size: 64
   loss:
-    type: mse
+    type: huber
+    delta: 1.0
+
+  optimizer:
+    type: "AdamW"
+    betas: [0.9, 0.999]
+    # lr, weight_decay: set per trial by optuna_hybrid_cnn_lstm_worker.py
+
+  gradient_clip_norm: 2.0
+
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 6
+    min_lr: 1.0e-6
 
 early_stopping:
   patience: 15
+
+multi_task:
+  los_loss_weight: 1.0
+  mortality_loss_weight: 1.0
 
 data:
   data_dir: "data/icu_ecgs_24h/P1"
@@ -41,7 +69,7 @@ data:
 
   ehr_window_features:
     enabled: true
-    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
+    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
     exclude_columns:
       - "base_path"
       - "study_id"
@@ -51,10 +79,18 @@ data:
       - "stay_intime"
       - "hadm_id"
       - "t_cut"
+      - "ehr_window_hours"
     normalize: "zscore"
 
   augmentation:
     enabled: true
     gaussian_noise: true
+    noise_std: 0.03
+    amplitude_scaling: false
     lead_dropout: true
+    lead_dropout_prob: 0.1
     baseline_wander: true
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08

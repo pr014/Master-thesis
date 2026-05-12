@@ -1,0 +1,8 @@
+# D1: ECG only (icustay_ecgs_24h / P1) — no tabular add-ons
+data:
+  demographic_features:
+    enabled: false
+  icu_unit_features:
+    enabled: false
+  ehr_window_features:
+    enabled: false

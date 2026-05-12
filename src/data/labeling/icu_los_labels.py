@@ -344,7 +344,7 @@ def get_num_classes_from_config(config: Dict[str, Any]) -> Optional[int]:
     data_config = config.get("data", {})
     
     # Check task type - regression doesn't use classes
-    task_type = data_config.get("task_type", "regression")
+    task_type = data_config.get("task_type") or data_config.get("los_task", "regression")
     if task_type == "regression":
         return None  # No classes for regression
     

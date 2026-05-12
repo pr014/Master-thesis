@@ -5,7 +5,10 @@ Used by:
   - scripts/tuning/optuna_hybrid_cnn_lstm_worker.py
   - scripts/cluster/icu_24h/hybrid_cnn_lstm/launch_optuna_hybrid_workers.sh (precreate + schema)
 
-Repro / overrides via environment (defaults match single-objective TPE + MedianPruner defaults in spirit):
+Single objective: minimize best validation **total loss** (multi-task combined val_loss,
+consistent with fixed los/mortality loss weights in optuna_base). TPESampler + MedianPruner.
+
+Repro / overrides via environment:
   OPTUNA_TPE_SEED
   OPTUNA_MEDIAN_N_STARTUP_TRIALS
   OPTUNA_MEDIAN_N_WARMUP_STEPS
@@ -45,6 +48,7 @@ def make_pruner() -> pruners.MedianPruner:
 def study_config_summary() -> str:
     return (
         f"TPESampler(seed={tpe_seed()}), "
+        f"direction=minimize(best_val_loss / val_loss), "
         f"MedianPruner(n_startup_trials={median_n_startup_trials()}, "
         f"n_warmup_steps={median_n_warmup_steps()})"
     )

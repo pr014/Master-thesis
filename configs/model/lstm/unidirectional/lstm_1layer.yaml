@@ -1,6 +1,15 @@
-# LSTM1D Unidirectional (1-Layer) - Vollständige Konfiguration
+# LSTM1D Unidirectional (1-Layer) — Studienzeile A3 (unidir. LSTM)
 # Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
 # Pure LSTM architecture (no CNN) with improvements: mean pooling, embedding
+#
+# Gemeinsam mit allen Architekturen: P1, D1, AG1 | H4: Studientabelle „Uni LSTM“
+# - P1: data/icu_ecgs_24h/P1 + Bandpass/Z-score (preprocessing)
+# - D1: ECG-only — keine Demographics, ICU-Unit-, SOFA-, Therapie-, EHR-Fenster-Features
+# - AG1: nur Gaussian Noise (noise_std 0.03)
+# - H4: lr 3e-4, Batch 128, wd 2e-4, lstm_dropout 0.4, dropout_rate 0.4, grad_clip 1,
+#   ReduceLROnPlateau (factor 0.5, patience 12, min_lr 1e-6), ES patience 5, hidden_dim 128,
+#   embedding_dim 128 (zweites „128“ in H4-Zeile), betas [0.9, 0.999], LOS-Loss Huber (delta 0.03)
+# - Mortalität Test: f1_optimal (Val-max-F1-Threshold, auf Test angewandt), siehe training_utils
 
 # =============================================================================
 # GENERAL SETTINGS
@@ -38,15 +47,82 @@ data:
     enabled: true
     gaussian_noise: true
     noise_std: 0.03
-    amplitude_scaling: true
+    amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
+    lead_dropout: false
+    lead_dropout_prob: 0.1
+    baseline_wander: false
+    bw_freq_min: 0.15
+    bw_freq_max: 0.4
+    bw_amp_min: 0.03
+    bw_amp_max: 0.08
+    time_segment_shuffle: false
+    time_segment_shuffle_num_segments: 5
+    time_segment_shuffle_p: 0.5
+    mortality_balance_time_shuffle:
+      enabled: false
   
   demographic_features:
     enabled: false
+    records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
+    age_normalization: "minmax"
+    age_min: 0
+    age_max: 120
+    sex_encoding: "binary"
+    missing_age_strategy: "median"
+    missing_sex_strategy: "default"
   
   icu_unit_features:
     enabled: false
+    encoding: "onehot"
+    icu_unit_list:
+      - "Medical Intensive Care Unit (MICU)"
+      - "Medical/Surgical Intensive Care Unit (MICU/SICU)"
+      - "Cardiac Vascular Intensive Care Unit (CVICU)"
+      - "Surgical Intensive Care Unit (SICU)"
+      - "Coronary Care Unit (CCU)"
+      - "Trauma SICU (TSICU)"
+      - "Neuro Intermediate"
+      - "Neuro Surgical Intensive Care Unit (Neuro SICU)"
+      - "Neuro Stepdown"
+      - "Surgery/Vascular/Intermediate"
+    unknown_strategy: "other"
+    missing_strategy: "most_common"
+
+  sofa_features:
+    enabled: false
+    csv_path: "data/labeling/labels_csv/sofa_scores.csv"
+    columns:
+      - sofa_total
+    require_available: true
+    filter_to_valid_sofa: false
+    normalize: "none"
+
+  icu_therapy_support_features:
+    enabled: false
+    csv_path: "data/labeling/labels_csv/icu_therapy_support.csv"
+    columns:
+      - mech_vent
+      - niv_hfnc
+      - vaso_any
+      - vaso_non_catechol_any
+      - rrt
+    filter_to_labeled_only: true
+
+  ehr_window_features:
+    enabled: false
+    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
+    exclude_columns:
+      - "base_path"
+      - "study_id"
+      - "subject_id"
+      - "ecg_time"
+      - "stay_id"
+      - "stay_intime"
+      - "hadm_id"
+      - "t_cut"
+    normalize: "zscore"
 
 # =============================================================================
 # MODEL ARCHITECTURE
@@ -61,10 +137,11 @@ model:
   # Based on Kim et al. 2020: 128 units recommended for raw ECG signals
   # Improved architecture: 1-layer LSTM with dropout, mean pooling, embedding
   
-  hidden_dim: 128  # Hidden dimension for LSTM
-  num_layers: 1  # Number of LSTM layers
-  lstm_dropout: 0.2  # Dropout between LSTM layers (prevents overfitting)
-  bidirectional: false  # Unidirectional LSTM
+  # H4: hidden_dim 128, lstm_dropout 0.4, embedding_dim 128
+  hidden_dim: 128
+  num_layers: 1
+  lstm_dropout: 0.4
+  bidirectional: false
   
   # Pooling Strategy
   # "mean": Aggregates information across all timesteps (recommended)
@@ -72,37 +149,36 @@ model:
   
   # Embedding Layer (ENABLED)
   use_embedding: true
-  embedding_dim: 64
+  embedding_dim: 128
 
 # =============================================================================
 # TRAINING HYPERPARAMETERS
 # =============================================================================
 
 training:
-  batch_size: 64
+  batch_size: 128  # H4
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "Adam"
-    lr: 5e-4
-    weight_decay: 1e-4
-    betas: [0.9, 0.999]
-  
-  gradient_clip_norm: 1.0
-  dropout_rate: 0.3
-  
+    lr: 3.0e-4  # H4
+    weight_decay: 2.0e-4  # H4
+    betas: [0.9, 0.999]  # H4
+
+  gradient_clip_norm: 1.0  # H4
+  dropout_rate: 0.4  # H4
+
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.1
-    patience: 5
-    min_lr: 1e-6
-  
+    factor: 0.5  # H4
+    patience: 12  # H4
+    min_lr: 1.0e-6  # H4
+
   loss:
-    type: "mse"
-    weighted: true
-    method: "balanced"
+    type: "huber"  # H4
+    delta: 0.03
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -120,7 +196,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 7
+  patience: 5  # H4
   monitor: "val_loss"
   mode: "min"
 
@@ -151,6 +227,8 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
+  # Val-max-F1-Schwelle auf Validierung, auf Test angewandt (siehe training_utils).
+  mortality_test_threshold_mode: f1_optimal
 
 # =============================================================================
 # MULTI-TASK LEARNING

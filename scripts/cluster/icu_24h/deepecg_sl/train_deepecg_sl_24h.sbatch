@@ -2,7 +2,7 @@
 #SBATCH --job-name=deepecg_sl_24h_weighted
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=03:00:00          # Extended time for two-phase training (Phase 1: 2-3h, Phase 2: 4-5h, total ~6.5-8h)
+#SBATCH --time=02:00:00          # Budget 2h — Skript nur Phase 2; bei Timeout ggf. erhöhen
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)

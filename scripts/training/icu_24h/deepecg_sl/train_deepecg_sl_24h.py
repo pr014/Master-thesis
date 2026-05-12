@@ -150,14 +150,18 @@ class DeepECG_SL_Trainer(Trainer):
             ]
 
         betas = opt_config.get("betas", [0.9, 0.999])
+        eps = opt_config.get("eps")
+        adam_kw: dict = {"weight_decay": weight_decay, "betas": tuple(betas)}
+        if eps is not None:
+            adam_kw["eps"] = float(eps)
         if opt_type == "adamw":
-            return torch.optim.AdamW(param_groups, weight_decay=weight_decay, betas=betas)
+            return torch.optim.AdamW(param_groups, **adam_kw)
         if opt_type == "adam":
-            return torch.optim.Adam(param_groups, weight_decay=weight_decay, betas=betas)
+            return torch.optim.Adam(param_groups, **adam_kw)
         if opt_type == "sgd":
             momentum = opt_config.get("momentum", 0.9)
             return torch.optim.SGD(param_groups, lr=base_lr, weight_decay=weight_decay, momentum=momentum)
-        return torch.optim.AdamW(param_groups, weight_decay=weight_decay, betas=betas)
+        return torch.optim.AdamW(param_groups, **adam_kw)
 
     def train_phase1(self, max_epochs: int = 20, patience: int = 20):
         if self.phase != 1:

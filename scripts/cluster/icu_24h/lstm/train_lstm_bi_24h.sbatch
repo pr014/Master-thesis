@@ -6,7 +6,7 @@
 #SBATCH --nodes=1                # Anzahl Knoten (meist 1)
 #SBATCH --ntasks=1              # Anzahl Tasks pro Knoten (meist 1)
 #SBATCH --cpus-per-task=4       # CPU-Kerne für DataLoader (4-8 empfohlen)
-#SBATCH --mem=16G               # RAM-Anforderung (16GB sollte für Batch-Size 64 reichen)
+#SBATCH --mem=24G               # RAM (Batch 128)
 #SBATCH --gres=gpu:1            # GPU-Anforderung (1 GPU, jede verfügbare)
 #SBATCH --mail-type=BEGIN,END   # E-Mail bei Start und Ende
 #SBATCH --mail-user=zx9981@partner.kit.edu  # Deine E-Mail-Adresse
@@ -123,8 +123,11 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN
 # ============================================================================
 
+echo "Config: configs/model/lstm/bidirectional/lstm_bi_1layer.yaml (P1 / H4 / AG1 / D1)"
+
 # Training starten
-python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py
+python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py \
+  --model-config configs/model/lstm/bidirectional/lstm_bi_1layer.yaml
 
 TRAINING_EXIT_CODE=$?
 

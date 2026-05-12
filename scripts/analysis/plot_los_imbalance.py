@@ -180,7 +180,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(project_root / "configs" / "model" / "cnn_scratch.yaml"),
+        default=str(project_root / "configs" / "model" / "CNN" / "cnn_scratch.yaml"),
         help="Path to config file",
     )
     parser.add_argument(
