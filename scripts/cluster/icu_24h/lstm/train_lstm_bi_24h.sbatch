@@ -123,11 +123,15 @@ export PYTHONPATH="${SLURM_SUBMIT_DIR}:${PYTHONPATH}"
 # TRAINING STARTEN
 # ============================================================================
 
-echo "Config: configs/model/lstm/bidirectional/lstm_bi_1layer.yaml (P1 / H4 / AG1 / D1)"
+# Default: 1-Layer Bi-LSTM. Kann via Env-Var überschrieben werden:
+#   sbatch --export=ALL,LSTM_BI_MODEL_CONFIG=configs/model/lstm/bidirectional/lstm_bi_2layer.yaml ...
+LSTM_BI_MODEL_CONFIG="${LSTM_BI_MODEL_CONFIG:-configs/model/lstm/bidirectional/lstm_bi_1layer.yaml}"
+
+echo "Config: ${LSTM_BI_MODEL_CONFIG}"
 
 # Training starten
 python scripts/training/icu_24h/lstm/train_lstm_bi_24h.py \
-  --model-config configs/model/lstm/bidirectional/lstm_bi_1layer.yaml
+  --model-config "${LSTM_BI_MODEL_CONFIG}"
 
 TRAINING_EXIT_CODE=$?
 

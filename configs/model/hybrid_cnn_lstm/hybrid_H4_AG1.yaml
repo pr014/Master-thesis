@@ -1,12 +1,10 @@
-# Hybrid CNN-LSTM — final Optuna configuration
-# P1 / AG4 / D5 (full EHR + ICU + demographics)
+# Hybrid CNN-LSTM — H4 / AG1 / D1
 # - P1: data/icu_ecgs_24h/P1 + Bandpass/Z-score (preprocessing)
-# - D5: full EHR window features + demographics + ICU unit one-hot
-# - AG4: Gaussian noise 3% signal std + Lead dropout p=0.1 + Baseline wander (0.15–0.4 Hz, amp 0.03–0.08)
-# - Final HPO values from full-EHR Optuna best trial:
-#   lr 0.002997257839585704, wd 0.00038678281441586245,
-#   dropout_rate 0.2662402656826101, lstm_dropout 0.4439417268744873,
-#   hidden_dim 64 / hidden_dim_layer2 64, AdamW betas [0.9, 0.999], Huber(delta=1.0)
+# - D1: ECG-only, no demographics, no ICU unit, no EHR/SOFA/therapy features
+# - AG1: Gaussian noise only (noise_std 0.03)
+# - H4: lr 2e-4, batch 64, wd 2e-4, dropout_rate 0.4, lstm_dropout 0.4,
+#   grad_clip 1, scheduler patience 7, ES patience 12,
+#   hidden_dim 128 / hidden_dim_layer2 64, Adam betas [0.9, 0.999], Huber loss
 #
 # Mortalität Test-Eval: validation max-F1 threshold, siehe training_utils.
 
@@ -48,7 +46,7 @@ data:
     filter_order: 4
     normalize: "zscore"
   
-  # Augmentation AG4 (siehe Kopfkommentar)
+  # Augmentation AG1 (siehe Kopfkommentar)
   augmentation:
     enabled: true
     gaussian_noise: true
@@ -56,9 +54,9 @@ data:
     amplitude_scaling: false
     scale_min: 0.85
     scale_max: 1.15
-    lead_dropout: true
+    lead_dropout: false
     lead_dropout_prob: 0.1
-    baseline_wander: true
+    baseline_wander: false
     bw_freq_min: 0.15
     bw_freq_max: 0.4
     bw_amp_min: 0.03
@@ -72,7 +70,7 @@ data:
       # children_per_positive: 10
   
   demographic_features:
-    enabled: true
+    enabled: false
     records_csv_path: "data/labeling/labels_csv/records_w_diag_icd10.csv"
     age_normalization: "minmax"
     age_min: 0
@@ -82,7 +80,7 @@ data:
     missing_sex_strategy: "default"
   
   icu_unit_features:
-    enabled: true
+    enabled: false
     encoding: "onehot"
     # Top-10 first_careunit by ICU stay count (same list as configs/features/icu_unit_features.yaml, DeepECG-SL, LSTM)
     icu_unit_list:
@@ -120,7 +118,7 @@ data:
     filter_to_labeled_only: true
 
   ehr_window_features:
-    enabled: true
+    enabled: false
     csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
     exclude_columns:
       - "base_path"
@@ -151,10 +149,10 @@ model:
   conv3_kernel: 3
   # Padding defaults to kernel//2 for same-length conv
 
-  # LSTM — final Optuna full-EHR best trial: preset 64_64
-  hidden_dim: 64
+  # LSTM — H4
+  hidden_dim: 128
   num_layers: 2
-  lstm_dropout: 0.4439417268744873
+  lstm_dropout: 0.4
   bidirectional: true
   hidden_dim_layer2: 64
   
@@ -171,28 +169,28 @@ model:
 
 training:
   batch_size: 64
-  num_epochs: 200
+  num_epochs: 50
   num_workers: 4
   pin_memory: true
 
   optimizer:
-    type: "AdamW"
-    lr: 0.002997257839585704
-    weight_decay: 0.00038678281441586245
+    type: "Adam"
+    lr: 2.0e-4
+    weight_decay: 2.0e-4
     betas: [0.9, 0.999]
 
-  gradient_clip_norm: 2.0
-  dropout_rate: 0.2662402656826101
+  gradient_clip_norm: 1.0
+  dropout_rate: 0.4
 
   scheduler:
     type: "ReduceLROnPlateau"
     factor: 0.5
-    patience: 6
+    patience: 7
     min_lr: 1.0e-6
 
   loss:
     type: "huber"
-    delta: 1.0
+    delta: 0.03
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -210,7 +208,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 15
+  patience: 12
   monitor: "val_loss"
   mode: "min"
 

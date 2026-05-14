@@ -1,0 +1,65 @@
+# MAE violin plot: baseline models on test ECGs/stays with true ICU LOS <= 10 days.
+# Run:
+#   sbatch scripts/cluster/analysis/plot_mae_violins_10days_baseline.sbatch
+
+evaluation:
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+  # Set to null or remove this key to evaluate on the full test set.
+  max_true_los_days: 10.0
+
+plot:
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 7
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  annotate_format: "value_only"
+  rotation: 22
+
+output:
+  pdf_path: "outputs/results/models/violin/le10_baseline_mae.pdf"
+  summary_csv_path: "outputs/results/models/violin/le10_baseline_mae_summary.csv"
+  errors_csv_path: "outputs/results/models/violin/le10_baseline_mae_errors.csv"
+
+jobs:
+  - enabled: true
+    architecture: "XGBoost"
+    model_type: "xgboost"
+    job_id: "4644575"
+    plot_label: "XGBoost"
+    config_path: "configs/classical_ml/xgboost_handcrafted.yaml"
+
+  - enabled: true
+    architecture: "CNNScratch"
+    job_id: "4644576"
+    plot_label: "CNN (scratch)"
+
+  - enabled: true
+    architecture: "LSTM1D_Unidirectional"
+    job_id: "4654867"
+    plot_label: "LSTM (uni)"
+
+  - enabled: true
+    architecture: "LSTM1D_Bidirectional"
+    job_id: "4644578"
+    plot_label: "LSTM (bi)"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4654748"
+    plot_label: "Hybrid CNN-LSTM"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4644579"
+    plot_label: "DeepECG-SL"
+
+  - enabled: true
+    architecture: "HuBERT_ECG"
+    job_id: "4647404"
+    plot_label: "HuBERT-ECG"

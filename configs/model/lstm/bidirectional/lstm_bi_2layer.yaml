@@ -1,12 +1,12 @@
 # LSTM1D Bidirectional (2-Layer) — Studienzeile A4 (bidirect. LSTM, 2 Schichten)
-# P1, D1, AG1 | H1: Studientabelle (wie Hybrid/CNN H1)
+# P1, D1, AG1 | H3: Studientabelle
 # - P1: data/icu_ecgs_24h/P1 + Bandpass/Z-score
 # - D1: ECG-only — keine Tabellar-/EHR-Features (alle Feature-Blöcke enabled: false)
 # - AG1: nur Gaussian Noise noise_std 0.03
-# - H1: lr 5e-4, Batch 64, wd 1e-4, lstm_dropout 0.2, dropout_rate 0.3, grad_clip 1,
-#   ReduceLROnPlateau (0.1, patience 5, min_lr 1e-6), ES patience 7,
-#   hidden_dim 128, hidden_dim_layer2 64 (pro Richtung), embedding_dim 64, betas [0.9, 0.999], LOS-Loss MSE
-# - Mortalität Test: fixed_0_5
+# - H3: lr 2e-4, Batch 128, wd 2e-4, lstm_dropout 0.4, dropout_rate 0.4, grad_clip 1,
+#   ReduceLROnPlateau (factor 0.5, patience 10, min_lr 1e-6), ES patience 12,
+#   hidden_dim 128, hidden_dim_layer2 128 (pro Richtung), embedding_dim 64, betas [0.9, 0.999], LOS-Loss MSE
+# - Mortalität Test: fixed_0_5 (Schwelle 0.5 auf Test)
 
 seed: 42
 
@@ -125,16 +125,16 @@ model:
   type: "LSTM1D_Bidirectional"
   num_classes: 10
   
-  # H1: Layer 1 — 128 units/dir.; Layer 2 — 64 units/dir. (Tabelle); embedding 64
-  hidden_dim: 128
-  hidden_dim_layer2: 64
+  # H3: Layer 1 — 128 units/dir.; Layer 2 — 128 units/dir.; embedding 64
+  hidden_dim: 128  # H3
+  hidden_dim_layer2: 128  # H3
   num_layers: 2
-  lstm_dropout: 0.2
+  lstm_dropout: 0.4  # H3
   bidirectional: true
-  
+
   # Pooling Strategy
   pooling: "mean"
-  
+
   use_embedding: true
   embedding_dim: 64
 
@@ -143,28 +143,28 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 64  # H1
+  batch_size: 128  # H3
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "Adam"
-    lr: 5.0e-4  # H1
-    weight_decay: 1.0e-4  # H1
-    betas: [0.9, 0.999]  # H1
-  
-  gradient_clip_norm: 1.0  # H1
-  dropout_rate: 0.3  # H1
-  
+    lr: 2.0e-4  # H3
+    weight_decay: 2.0e-4  # H3
+    betas: [0.9, 0.999]  # H3
+
+  gradient_clip_norm: 1.0  # H3
+  dropout_rate: 0.4  # H3
+
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.1  # H1
-    patience: 5  # H1
-    min_lr: 1.0e-6  # H1
-  
+    factor: 0.5  # H3
+    patience: 10  # H3
+    min_lr: 1.0e-6  # H3
+
   loss:
-    type: "mse"  # H1
+    type: "mse"  # H3
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -182,7 +182,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 7  # H1
+  patience: 12  # H3
   monitor: "val_loss"
   mode: "min"
 
@@ -213,7 +213,7 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
-  # Feste Schwelle 0.5 auf Test (kein Val-max-F1).
+  # Feste Schwelle 0.5 auf Test.
   mortality_test_threshold_mode: fixed_0_5
 
 # =============================================================================

@@ -1,12 +1,15 @@
-# DeepECG-SL (WCR) — Studienzeile A6.1 | Gewichte: wcr_77_classes | H1 (Studientabelle)
+# DeepECG-SL (WCR) — Studienzeile: P1 + AG1 + D1 + H3 | Gewichte: wcr_77_classes
 #
-# Gemeinsam mit allen Architekturen: P1, D1, AG1
-# - Pretrained: cache_dir + model.wcr.model_name (wcr_77_classes)
+# - P1: data/icu_ecgs_24h/P1, Bandpass 0.5–50 Hz + Z-score
+# - AG1 (train only): nur Gauß-Rauschen (noise_std=0.03 of per-lead signal std)
+# - D1: keine zusätzlichen Features (Demographics / ICU-Unit / SOFA / Therapy / EHR alle disabled)
+# - H3: batch 32, Adam lr 5e-4, wd 1e-2, dropout 0.1, grad clip 1,
+#       betas [0.9, 0.98], eps 1e-6, ReduceLROnPlateau factor 0.5 patience 8,
+#       min_lr 1e-6, ES patience 15, LOS Huber (delta 1.0); d_model 768, shared_dim 256
+# - Mortality Threshold (Test): f1_optimal (auf Val getunt, auf Test angewendet)
+# - Pretrained: cache_dir + model.wcr.model_name (wcr_77_classes / WCR_77_classes, siehe wcr_encoder.py)
 # - Train-Skript: nur Phase 2 = volles Fine-Tuning (Encoder + Köpfe, siehe train_deepecg_sl_24h.py)
-# - H1: Adam lr 5e-4 (Backbone/Köpfe), batch 64, wd 1e-4, dropout 0.3, ReduceLROnPlateau factor 0.1 patience 5,
-#       min_lr 1e-6, ES patience 7, LOS-MSE; shared_dim 256; d_model 768
 #
-# Pretrained: cache_dir + model.wcr.model_name (wcr_77_classes / WCR_77_classes, siehe wcr_encoder.py)
 # WCR = Wav2Vec2 mit CMSC; Based on: https://github.com/HeartWise-AI/DeepECG_Docker
 
 # =============================================================================
@@ -165,31 +168,32 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 64
+  batch_size: 32
   num_epochs: 50
   num_workers: 4
   pin_memory: true
-  
+
   optimizer:
     type: "Adam"
     lr: 5.0e-4
     backbone_lr: 5.0e-4
     head_lr: 5.0e-4
-    weight_decay: 1.0e-4
-    betas: [0.9, 0.999]
+    weight_decay: 1.0e-2
+    betas: [0.9, 0.98]
     eps: 1.0e-6
-  
+
   gradient_clip_norm: 1.0
-  dropout_rate: 0.3
-  
+  dropout_rate: 0.1
+
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.1
-    patience: 5
+    factor: 0.5
+    patience: 8
     min_lr: 1.0e-6
-  
+
   loss:
-    type: "mse"
+    type: "huber"
+    delta: 1.0
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -207,7 +211,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 7
+  patience: 15
   monitor: "val_loss"
   mode: "min"
 
@@ -238,7 +242,7 @@ evaluation:
     - "median_ae"
     - "accuracy"
     - "auc_roc"
-  mortality_test_threshold_mode: fixed_0_5
+  mortality_test_threshold_mode: f1_optimal   # F1-max threshold (tuned on validation, applied to test)
 
 # =============================================================================
 # MULTI-TASK LEARNING

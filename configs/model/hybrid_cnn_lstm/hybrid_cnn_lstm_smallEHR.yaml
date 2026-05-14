@@ -1,12 +1,12 @@
 # Hybrid CNN-LSTM — final Optuna configuration
-# P1 / AG4 / D5 (full EHR + ICU + demographics)
+# P1 / AG4 / D6 (EHR-small + ICU + demographics)
 # - P1: data/icu_ecgs_24h/P1 + Bandpass/Z-score (preprocessing)
-# - D5: full EHR window features + demographics + ICU unit one-hot
+# - D6: EHR-small window features + demographics + ICU unit one-hot
 # - AG4: Gaussian noise 3% signal std + Lead dropout p=0.1 + Baseline wander (0.15–0.4 Hz, amp 0.03–0.08)
-# - Final HPO values from full-EHR Optuna best trial:
-#   lr 0.002997257839585704, wd 0.00038678281441586245,
-#   dropout_rate 0.2662402656826101, lstm_dropout 0.4439417268744873,
-#   hidden_dim 64 / hidden_dim_layer2 64, AdamW betas [0.9, 0.999], Huber(delta=1.0)
+# - Final HPO values from EHR-small Optuna best trial:
+#   lr 0.0017168412691106819, wd 0.000977681110033039,
+#   dropout_rate 0.4108984960077258, lstm_dropout 0.4837846095833593,
+#   hidden_dim 256 / hidden_dim_layer2 256, AdamW betas [0.9, 0.999], Huber(delta=1.0)
 #
 # Mortalität Test-Eval: validation max-F1 threshold, siehe training_utils.
 
@@ -121,7 +121,7 @@ data:
 
   ehr_window_features:
     enabled: true
-    csv_path: "data/labeling/labels_csv/EHR_feature_data.csv"
+    csv_path: "data/labeling/labels_csv/EHR_feature_data_small.csv"
     exclude_columns:
       - "base_path"
       - "study_id"
@@ -131,6 +131,7 @@ data:
       - "stay_intime"
       - "hadm_id"
       - "t_cut"
+      - "ehr_window_hours"
     normalize: "zscore"
 
 # =============================================================================
@@ -151,12 +152,12 @@ model:
   conv3_kernel: 3
   # Padding defaults to kernel//2 for same-length conv
 
-  # LSTM — final Optuna full-EHR best trial: preset 64_64
-  hidden_dim: 64
+  # LSTM — final Optuna EHR-small best trial: preset 256_256
+  hidden_dim: 256
   num_layers: 2
-  lstm_dropout: 0.4439417268744873
+  lstm_dropout: 0.4837846095833593
   bidirectional: true
-  hidden_dim_layer2: 64
+  hidden_dim_layer2: 256
   
   # Pooling Strategy
   # "mean": Aggregates information across all timesteps (recommended)
@@ -177,12 +178,12 @@ training:
 
   optimizer:
     type: "AdamW"
-    lr: 0.002997257839585704
-    weight_decay: 0.00038678281441586245
+    lr: 0.0017168412691106819
+    weight_decay: 0.000977681110033039
     betas: [0.9, 0.999]
 
   gradient_clip_norm: 2.0
-  dropout_rate: 0.2662402656826101
+  dropout_rate: 0.4108984960077258
 
   scheduler:
     type: "ReduceLROnPlateau"

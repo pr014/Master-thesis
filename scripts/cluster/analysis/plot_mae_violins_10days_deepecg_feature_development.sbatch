@@ -1,25 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=test10d_baseline
-#SBATCH --output=outputs/logs/slurm_%j.out
-#SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=04:00:00
+#SBATCH --job-name=viol10_deepecg
+#SBATCH --output=outputs/logs/viol10_deepecg_%j.out
+#SBATCH --error=outputs/logs/viol10_deepecg_%j.err
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu_a100_il,gpu_h100_il
-
-# Legacy filename, current behavior: recomputes the complete baseline 10-day split table
-# using the baseline GROUP_PRESETS job IDs in scripts/test_10days/test_10days.py.
-#
-# Submit:
-#   sbatch scripts/cluster/analysis/test_10days_deepecg_hubert_gpu.sbatch
-#
-# Writes:
-#   outputs/results/test_10days_split/baseline/baseline_10days_split.csv
-#
-# Do not pass --resume or --reuse-partial-csv when refreshing the baseline table.
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=zx9981@partner.kit.edu
 
 set -euo pipefail
 
@@ -29,9 +20,10 @@ echo "Start time: $(date)"
 
 PROJECT_ROOT="/home/ka/ka_aifb/ka_zx9981/workspace/ma-thesis/MA-thesis-1"
 cd "${PROJECT_ROOT}"
-mkdir -p outputs/logs
+mkdir -p outputs/logs outputs/results/models/violin
 
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+export ICUSTAYS_PATH="${PROJECT_ROOT}/data/labeling/labels_csv/icustays.csv"
 
 module load devel/python/3.12.3-gnu-14.2
 module load devel/cuda/12.8
@@ -39,9 +31,11 @@ module load devel/cuda/12.8
 if [ -f "${PROJECT_ROOT}/venv/bin/activate" ]; then
   # shellcheck source=/dev/null
   source "${PROJECT_ROOT}/venv/bin/activate"
+else
+  echo "ERROR: venv not found at ${PROJECT_ROOT}/venv/bin/activate"
+  exit 1
 fi
 
-# Prefer PyTorch's bundled libs over a conflicting system cuDNN (same as other DL sbatch jobs)
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
   export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -iv cudnn | grep -v '^$' | tr '\n' ':' | sed 's/:$//')
 fi
@@ -57,8 +51,13 @@ if torch.cuda.is_available():
     print("device", torch.cuda.get_device_name(0))
 PY
 
-python "${PROJECT_ROOT}/scripts/test_10days/test_10days.py" \
-  --device cuda \
-  --preset baseline
+EXTRA=()
+if [ -n "${VIOLIN_EXTRA_ARGS:-}" ]; then
+  read -r -a EXTRA <<< "${VIOLIN_EXTRA_ARGS}"
+fi
+
+python "${PROJECT_ROOT}/scripts/analysis/results/plot_mae_violins.py" \
+  --config "${PROJECT_ROOT}/configs/analysis/mae_violin_10days_feature_development_deepecg.yaml" \
+  "${EXTRA[@]}"
 
 echo "End time: $(date)"

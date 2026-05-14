@@ -1,0 +1,59 @@
+# MAE violin plot configuration for the H4-style architecture comparison.
+# Run on the cluster with:
+#   VIOLIN_CONFIG=configs/analysis/mae_violin_H4.yaml sbatch scripts/cluster/analysis/plot_mae_violins.sbatch
+
+evaluation:
+  # "stay" matches the stay-level aggregation used by evaluate_with_detailed_metrics:
+  # mean predictions per stay_id, then abs(prediction - true LOS).
+  # Use "ecg" if you want one error per ECG window instead.
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+
+plot:
+  # Clean figure: no title unless show_title is true and title is set.
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 5
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  # value_only = mean only (e.g. 2.31); mae = "MAE 2.31"
+  annotate_format: "value_only"
+  rotation: 22
+
+output:
+  pdf_path: "outputs/results/models/violin/models_H4_mae.pdf"
+  summary_csv_path: "outputs/results/models/violin/models_H4_mae_summary.csv"
+  # Set to a CSV path if you want all per-sample errors saved too.
+  errors_csv_path: null
+
+jobs:
+  # H4-style comparison from the thesis overview table.
+  # DeepECG-SL uses H3 and HuBERT-ECG uses H2 according to the listed best setup.
+  - enabled: true
+    architecture: "LSTM1D_Unidirectional"
+    job_id: "4661392"
+    plot_label: "LSTM (uni)"
+
+  - enabled: true
+    architecture: "LSTM1D_Bidirectional"
+    job_id: "4663211"
+    plot_label: "LSTM (bi)"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4656940"
+    plot_label: "Hybrid CNN-LSTM"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4663595"
+    plot_label: "DeepECG-SL"
+
+  - enabled: true
+    architecture: "HuBERT_ECG"
+    job_id: "4584798"
+    plot_label: "HuBERT-ECG"

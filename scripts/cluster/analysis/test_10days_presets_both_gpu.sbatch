@@ -14,7 +14,7 @@
 
 # Runs GROUP_PRESETS from scripts/test_10days/test_10days.py sequentially:
 #   1) h4_baseline → outputs/results/test_10days_split/h4_baseline/h4_baseline_10days_split.csv
-#   2) feature_development → .../feature_development/feature_development_10days_split.csv
+#   2) feature_development → .../feature_development/hybrid/feature_development_10days_split.csv
 #
 # Submit (cluster login node, repo root):
 #   sbatch scripts/cluster/analysis/test_10days_presets_both_gpu.sbatch

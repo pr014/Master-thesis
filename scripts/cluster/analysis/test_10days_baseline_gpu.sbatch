@@ -9,17 +9,20 @@
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu_a100_il,gpu_h100_il
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=zx9981@partner.kit.edu
 
-# Legacy filename, current behavior: recomputes the complete baseline 10-day split table
-# using the baseline GROUP_PRESETS job IDs in scripts/test_10days/test_10days.py.
-#
-# Submit:
-#   sbatch scripts/cluster/analysis/test_10days_deepecg_hubert_gpu.sbatch
+# Preset baseline only: recomputes the 10-day split table for the seven baseline jobs
+# from GROUP_PRESETS in scripts/test_10days/test_10days.py.
 #
 # Writes:
 #   outputs/results/test_10days_split/baseline/baseline_10days_split.csv
 #
-# Do not pass --resume or --reuse-partial-csv when refreshing the baseline table.
+# Submit:
+#   sbatch scripts/cluster/analysis/test_10days_baseline_gpu.sbatch
+#
+# Do not pass --resume or --reuse-partial-csv here: this job should refresh the old
+# baseline CSV with the current baseline job IDs.
 
 set -euo pipefail
 
@@ -41,7 +44,6 @@ if [ -f "${PROJECT_ROOT}/venv/bin/activate" ]; then
   source "${PROJECT_ROOT}/venv/bin/activate"
 fi
 
-# Prefer PyTorch's bundled libs over a conflicting system cuDNN (same as other DL sbatch jobs)
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
   export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -iv cudnn | grep -v '^$' | tr '\n' ':' | sed 's/:$//')
 fi

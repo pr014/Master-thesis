@@ -1,0 +1,63 @@
+# MAE violin plot configuration for DeepECG-SL feature development (D1-D6).
+# Run on the cluster with:
+#   VIOLIN_CONFIG=configs/analysis/mae_violin_feature_development_deepecg.yaml sbatch scripts/cluster/analysis/plot_mae_violins.sbatch
+
+evaluation:
+  # "stay" matches the stay-level aggregation used by evaluate_with_detailed_metrics:
+  # mean predictions per stay_id, then abs(prediction - true LOS).
+  # Use "ecg" if you want one error per ECG window instead.
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+
+plot:
+  # Clean figure: no title unless show_title is true and title is set.
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 6
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  # value_only = mean only (e.g. 2.31); mae = "MAE 2.31"
+  annotate_format: "value_only"
+  rotation: 0
+
+output:
+  pdf_path: "outputs/results/models/violin/feature_development_deepecg_mae.pdf"
+  summary_csv_path: "outputs/results/models/violin/feature_development_deepecg_mae_summary.csv"
+  # Set to a CSV path if you want all per-sample errors saved too.
+  errors_csv_path: null
+
+jobs:
+  # DeepECG-SL feature development D1-D6.
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656770"
+    plot_label: "D1"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656771"
+    plot_label: "D2"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656772"
+    plot_label: "D3"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656773"
+    plot_label: "D4"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656774"
+    plot_label: "D5"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4656775"
+    plot_label: "D6"

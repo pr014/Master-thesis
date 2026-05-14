@@ -1,25 +1,26 @@
 #!/bin/bash
-#SBATCH --job-name=test10d_baseline
+#SBATCH --job-name=test10d_base_h4
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu_a100_il,gpu_h100_il
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=zx9981@partner.kit.edu
 
-# Legacy filename, current behavior: recomputes the complete baseline 10-day split table
-# using the baseline GROUP_PRESETS job IDs in scripts/test_10days/test_10days.py.
+# Recomputes only the two 10-day split summary tables that need refreshing:
+#   1) baseline    -> outputs/results/test_10days_split/baseline/baseline_10days_split.csv
+#   2) h4_baseline -> outputs/results/test_10days_split/h4_baseline/h4_baseline_10days_split.csv
+#
+# The job IDs come from GROUP_PRESETS in scripts/test_10days/test_10days.py.
+# No --resume / --reuse-partial-csv here: both CSVs should be regenerated with current IDs.
 #
 # Submit:
-#   sbatch scripts/cluster/analysis/test_10days_deepecg_hubert_gpu.sbatch
-#
-# Writes:
-#   outputs/results/test_10days_split/baseline/baseline_10days_split.csv
-#
-# Do not pass --resume or --reuse-partial-csv when refreshing the baseline table.
+#   sbatch scripts/cluster/analysis/test_10days_baseline_h4_gpu.sbatch
 
 set -euo pipefail
 
@@ -41,7 +42,6 @@ if [ -f "${PROJECT_ROOT}/venv/bin/activate" ]; then
   source "${PROJECT_ROOT}/venv/bin/activate"
 fi
 
-# Prefer PyTorch's bundled libs over a conflicting system cuDNN (same as other DL sbatch jobs)
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
   export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -iv cudnn | grep -v '^$' | tr '\n' ':' | sed 's/:$//')
 fi
@@ -59,6 +59,6 @@ PY
 
 python "${PROJECT_ROOT}/scripts/test_10days/test_10days.py" \
   --device cuda \
-  --preset baseline
+  --preset baseline_h4
 
 echo "End time: $(date)"

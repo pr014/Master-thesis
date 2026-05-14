@@ -1,0 +1,58 @@
+# MAE violin plot: Hybrid CNN-LSTM D1-D6 on true ICU LOS <= 10 days.
+# Run:
+#   sbatch scripts/cluster/analysis/plot_mae_violins_10days_hybrid_feature_development.sbatch
+
+evaluation:
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+  # Set to null or remove this key to evaluate on the full test set.
+  max_true_los_days: 10.0
+
+plot:
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 6
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  annotate_format: "value_only"
+  rotation: 0
+
+output:
+  pdf_path: "outputs/results/models/violin/le10_hybrid_feature_development_mae.pdf"
+  summary_csv_path: "outputs/results/models/violin/le10_hybrid_feature_development_mae_summary.csv"
+  errors_csv_path: "outputs/results/models/violin/le10_hybrid_feature_development_mae_errors.csv"
+
+jobs:
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658273"
+    plot_label: "D1"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658274"
+    plot_label: "D2"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658275"
+    plot_label: "D3"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658276"
+    plot_label: "D4"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658277"
+    plot_label: "D5"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4658278"
+    plot_label: "D6"

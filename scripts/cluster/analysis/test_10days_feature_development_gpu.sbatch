@@ -2,7 +2,7 @@
 #SBATCH --job-name=test10d_feat_dev
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -12,8 +12,9 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=zx9981@partner.kit.edu
 
-# Preset feature_development only (6 jobs). Writes:
-#   outputs/results/test_10days_split/feature_development/feature_development_10days_split.csv
+# Preset feature_development_both (12 jobs): Hybrid D1–D6 then DeepECG D1–D6. Writes:
+#   .../feature_development/hybrid/feature_development_10days_split.csv
+#   .../feature_development/deepecg/feature_development_10days_split.csv
 #
 #   sbatch scripts/cluster/analysis/test_10days_feature_development_gpu.sbatch
 
@@ -59,7 +60,7 @@ fi
 
 python "${PROJECT_ROOT}/scripts/test_10days/test_10days.py" \
   --device cuda \
-  --preset feature_development \
+  --preset feature_development_both \
   "${EXTRA[@]}"
 
 echo "End time: $(date)"

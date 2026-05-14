@@ -1,7 +1,11 @@
 #!/bin/bash
-# Standard-Jobname (Mails/squeue). Für Feature-Label z. B. hybrid_d3 beim Submit überschreiben:
-#   sbatch --job-name=hybrid_d3 --export=ALL,TRAIN_EXTRA_ARGS="--model-config configs/model/hybrid_cnn_lstm/d1_d6/d3.yaml" ...
-# D1–D6 parallel: train_hybrid_cnn_lstm_24h_d1_d6.sbatch (setzt Jobname hybrid_d%a automatisch).
+# Standard-Jobname (Mails/squeue). Feature-Ablation D1–D6:
+#   bash scripts/cluster/icu_24h/hybrid_cnn_lstm/submit_hybrid_feature_development_d1_d6.sh
+# Einzeljob mit Overrides z. B.:
+#   sbatch --job-name=hybrid_D3 scripts/cluster/icu_24h/hybrid_cnn_lstm/train_hybrid_cnn_lstm_24h.sbatch \
+#     --model-config configs/model/hybrid_cnn_lstm/hybrid_cnn_lstm_p1_ag4_h4.yaml \
+#     --experiment-config configs/experiments/hybrid_cnn_lstm/feature_development/d3.yaml \
+#     --trial-id D3 --sweep-id hybrid_feature_dev
 #SBATCH --job-name=hybrid_cnn_lstm_24h
 #SBATCH --output=outputs/logs/slurm_%j.out
 #SBATCH --error=outputs/logs/slurm_%j.err

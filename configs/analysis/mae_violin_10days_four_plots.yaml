@@ -1,0 +1,156 @@
+# Four MAE violin PDFs (one figure each), test split only for **true ICU LOS <= 10 days**.
+# Toggle the cohort with ``evaluation.max_true_los_days`` (null / omit = full test set).
+#
+# All four figures in one job (long run — risk of walltime timeout):
+#   VIOLIN_CONFIG=configs/analysis/mae_violin_10days_four_plots.yaml sbatch scripts/cluster/analysis/plot_mae_violins.sbatch
+#
+# One SLURM job per figure (same YAML; groups 0..3 in file order: baseline, H4, hybrid, deepecg).
+# ``--array`` must be passed to **sbatch** (or as #SBATCH inside the batch file), not typed as a shell comment.
+#
+#   export VIOLIN_CONFIG=configs/analysis/mae_violin_10days_four_plots.yaml
+#   sbatch --array=0-3 scripts/cluster/analysis/plot_mae_violins.sbatch
+#
+# The batch script appends ``--plot-group-index ${SLURM_ARRAY_TASK_ID}`` per array task (unless you set it in VIOLIN_EXTRA_ARGS).
+
+evaluation:
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+  # Set to null or remove this key to evaluate on the **full** test set.
+  max_true_los_days: 10.0
+
+plot:
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 7
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  annotate_format: "value_only"
+  rotation: 22
+
+output:
+  # Per-group summaries are written next to each PDF. This file holds **all** rows
+  # from every job used across the four figures (deduplicated inference).
+  errors_csv_path: "outputs/results/models/violin/le10_four_plots_errors.csv"
+
+plot_groups:
+  - pdf_path: "outputs/results/models/violin/le10_baseline_mae.pdf"
+    summary_csv_path: "outputs/results/models/violin/le10_baseline_mae_summary.csv"
+    max_plots: 7
+    jobs:
+      - enabled: true
+        architecture: "XGBoost"
+        model_type: "xgboost"
+        job_id: "4644575"
+        plot_label: "XGBoost"
+        config_path: "configs/classical_ml/xgboost_handcrafted.yaml"
+      - enabled: true
+        architecture: "CNNScratch"
+        job_id: "4644576"
+        plot_label: "CNN (scratch)"
+      - enabled: true
+        architecture: "LSTM1D_Unidirectional"
+        job_id: "4654867"
+        plot_label: "LSTM (uni)"
+      - enabled: true
+        architecture: "LSTM1D_Bidirectional"
+        job_id: "4644578"
+        plot_label: "LSTM (bi)"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4654748"
+        plot_label: "Hybrid CNN-LSTM"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4644579"
+        plot_label: "DeepECG-SL"
+      - enabled: true
+        architecture: "HuBERT_ECG"
+        job_id: "4647404"
+        plot_label: "HuBERT-ECG"
+
+  - pdf_path: "outputs/results/models/violin/le10_H4_mae.pdf"
+    summary_csv_path: "outputs/results/models/violin/le10_H4_mae_summary.csv"
+    max_plots: 5
+    jobs:
+      - enabled: true
+        architecture: "LSTM1D_Unidirectional"
+        job_id: "4661392"
+        plot_label: "LSTM (uni)"
+      - enabled: true
+        architecture: "LSTM1D_Bidirectional"
+        job_id: "4663211"
+        plot_label: "LSTM (bi)"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4656940"
+        plot_label: "Hybrid CNN-LSTM"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4663595"
+        plot_label: "DeepECG-SL"
+      - enabled: true
+        architecture: "HuBERT_ECG"
+        job_id: "4584798"
+        plot_label: "HuBERT-ECG"
+
+  - pdf_path: "outputs/results/models/violin/le10_hybrid_feature_development_mae.pdf"
+    summary_csv_path: "outputs/results/models/violin/le10_hybrid_feature_development_mae_summary.csv"
+    max_plots: 6
+    jobs:
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658273"
+        plot_label: "D1"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658274"
+        plot_label: "D2"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658275"
+        plot_label: "D3"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658276"
+        plot_label: "D4"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658277"
+        plot_label: "D5"
+      - enabled: true
+        architecture: "HybridCNNLSTM"
+        job_id: "4658278"
+        plot_label: "D6"
+
+  - pdf_path: "outputs/results/models/violin/le10_deepecg_feature_development_mae.pdf"
+    summary_csv_path: "outputs/results/models/violin/le10_deepecg_feature_development_mae_summary.csv"
+    max_plots: 6
+    jobs:
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656770"
+        plot_label: "D1"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656771"
+        plot_label: "D2"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656772"
+        plot_label: "D3"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656773"
+        plot_label: "D4"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656774"
+        plot_label: "D5"
+      - enabled: true
+        architecture: "DeepECG_SL"
+        job_id: "4656775"
+        plot_label: "D6"

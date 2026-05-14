@@ -2,11 +2,11 @@
 # Enthält alle Parameter: Daten, Preprocessing, Augmentation, Training, Modell
 # Pure LSTM architecture (no CNN) with improvements: 2-layer, mean pooling, embedding
 #
-# Gemeinsam mit allen Architekturen: P1, D1, AG1 | H4: wie Uni LSTM (2 Schichten)
+# Gemeinsam mit allen Architekturen: P1, D1, AG1 | H3: wie Uni LSTM (2 Schichten)
 # - P1 / D1 / AG1: wie lstm_1layer.yaml
-# - H4: lr 3e-4, Batch 128, wd 2e-4, lstm_dropout 0.4, dropout_rate 0.4, grad_clip 1,
-#   ReduceLROnPlateau (factor 0.5, patience 12, min_lr 1e-6), ES patience 5,
-#   hidden_dim 128, hidden_dim_layer2 128, embedding_dim 64, betas [0.9, 0.999], Huber (delta 0.03)
+# - H3: lr 3e-4, Batch 128, wd 2e-4, lstm_dropout 0.4, dropout_rate 0.4, grad_clip 1,
+#   ReduceLROnPlateau (factor 0.5, patience 5, min_lr 1e-6), ES patience 12,
+#   hidden_dim 128, hidden_dim_layer2 128, embedding_dim 64, betas [0.9, 0.999], LOS-Loss MSE
 # Mortalität Test: f1_optimal (Val-max-F1 auf Test), siehe training_utils
 
 seed: 42
@@ -131,10 +131,10 @@ model:
   # Layer 1: 128, Layer 2: 128 (equal-size stacked LSTM)
   # ~205K params (LSTM core) + head (depends on demographics)
   
-  hidden_dim: 128
-  hidden_dim_layer2: 128
+  hidden_dim: 128  # H3
+  hidden_dim_layer2: 128  # H3
   num_layers: 2
-  lstm_dropout: 0.4
+  lstm_dropout: 0.4  # H3
   bidirectional: false
   pooling: "mean"
   use_embedding: true
@@ -145,29 +145,28 @@ model:
 # =============================================================================
 
 training:
-  batch_size: 128  # H4
+  batch_size: 128  # H3
   num_epochs: 50
   num_workers: 4
   pin_memory: true
 
   optimizer:
     type: "Adam"
-    lr: 3.0e-4  # H4
-    weight_decay: 2.0e-4  # H4
-    betas: [0.9, 0.999]  # H4
+    lr: 3.0e-4  # H3
+    weight_decay: 2.0e-4  # H3
+    betas: [0.9, 0.999]  # H3
 
-  gradient_clip_norm: 1.0  # H4
-  dropout_rate: 0.4  # H4
+  gradient_clip_norm: 1.0  # H3
+  dropout_rate: 0.4  # H3
 
   scheduler:
     type: "ReduceLROnPlateau"
-    factor: 0.5  # H4
-    patience: 12  # H4
-    min_lr: 1.0e-6  # H4
+    factor: 0.5  # H3
+    patience: 5  # H3
+    min_lr: 1.0e-6  # H3
 
   loss:
-    type: "huber"  # H4
-    delta: 0.03
+    type: "mse"  # H3
 
 # =============================================================================
 # VALIDATION & TEST SETTINGS
@@ -185,7 +184,7 @@ test_split: 0.1
 
 early_stopping:
   enabled: true
-  patience: 5  # H4
+  patience: 12  # H3
   monitor: "val_loss"
   mode: "min"
 

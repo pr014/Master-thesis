@@ -1,0 +1,53 @@
+# MAE violin plot: H4-style architecture comparison on true ICU LOS <= 10 days.
+# Run:
+#   sbatch scripts/cluster/analysis/plot_mae_violins_10days_H4.sbatch
+
+evaluation:
+  error_level: "stay"
+  batch_size: 64
+  num_workers: 4
+  device: "cuda"
+  # Set to null or remove this key to evaluate on the full test set.
+  max_true_los_days: 10.0
+
+plot:
+  show_title: false
+  title: null
+  ylabel: "Absolute error (days)"
+  color: "#8AD185"
+  max_plots: 5
+  show_mean_marker: true
+  annotate_mae_decimals: 2
+  annotate_format: "value_only"
+  rotation: 22
+
+output:
+  pdf_path: "outputs/results/models/violin/le10_H4_mae.pdf"
+  summary_csv_path: "outputs/results/models/violin/le10_H4_mae_summary.csv"
+  errors_csv_path: "outputs/results/models/violin/le10_H4_mae_errors.csv"
+
+jobs:
+  - enabled: true
+    architecture: "LSTM1D_Unidirectional"
+    job_id: "4661392"
+    plot_label: "LSTM (uni)"
+
+  - enabled: true
+    architecture: "LSTM1D_Bidirectional"
+    job_id: "4663211"
+    plot_label: "LSTM (bi)"
+
+  - enabled: true
+    architecture: "HybridCNNLSTM"
+    job_id: "4656940"
+    plot_label: "Hybrid CNN-LSTM"
+
+  - enabled: true
+    architecture: "DeepECG_SL"
+    job_id: "4663595"
+    plot_label: "DeepECG-SL"
+
+  - enabled: true
+    architecture: "HuBERT_ECG"
+    job_id: "4584798"
+    plot_label: "HuBERT-ECG"
